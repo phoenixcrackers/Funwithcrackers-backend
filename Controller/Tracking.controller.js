@@ -31,17 +31,14 @@ pool.query(createTransportTable).catch(err => console.error('Error creating tran
 
 // Send WhatsApp status update notification
 async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
-  // Format mobile number: remove non-digits and ensure it starts with country code
   let recipientNumber = mobileNumber;
   if (!recipientNumber) {
     throw new Error('Mobile number is missing');
   }
-  // Remove non-digit characters (spaces, dashes, etc.)
   recipientNumber = recipientNumber.replace(/\D/g, '');
-  // Ensure it starts with country code (e.g., +91 for India)
   if (!recipientNumber.startsWith('+')) {
     if (recipientNumber.length === 10) {
-      recipientNumber = `+91${recipientNumber}`; // Assume Indian number
+      recipientNumber = `+91${recipientNumber}`;
     } else if (recipientNumber.length === 12 && recipientNumber.startsWith('91')) {
       recipientNumber = `+${recipientNumber}`;
     } else {
@@ -54,23 +51,23 @@ async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
     to: recipientNumber,
     type: 'template',
     template: {
-      name: 'hello_world', // Replace with your actual template name
+      name: 'hello_world',
       language: { code: 'en_US' },
       components: [
         {
           type: 'body',
           parameters: [
-            { type: 'text', text: status }, // {{1}}
+            { type: 'text', text: status },
             ...(status === 'dispatched' && transportDetails
               ? [
-                  { type: 'text', text: transportDetails.transport_name || 'N/A' }, // {{2}}
-                  { type: 'text', text: transportDetails.lr_number || 'N/A' }, // {{3}}
-                  { type: 'text', text: transportDetails.transport_contact || 'N/A' } // {{4}}
+                  { type: 'text', text: transportDetails.transport_name || 'N/A' },
+                  { type: 'text', text: transportDetails.lr_number || 'N/A' },
+                  { type: 'text', text: transportDetails.transport_contact || 'N/A' }
                 ]
               : [
-                  { type: 'text', text: 'N/A' }, // {{2}}
-                  { type: 'text', text: 'N/A' }, // {{3}}
-                  { type: 'text', text: 'N/A' } // {{4}}
+                  { type: 'text', text: 'N/A' },
+                  { type: 'text', text: 'N/A' },
+                  { type: 'text', text: 'N/A' }
                 ])
           ]
         }
@@ -93,7 +90,7 @@ async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
     console.log(JSON.stringify(res.data, null, 2));
   } catch (err) {
     console.error('Error sending WhatsApp status update:', err.response ? JSON.stringify(err.response.data, null, 2) : err.message);
-    throw err;
+    // Do not throw error here to allow status update to proceed
   }
 }
 
@@ -170,10 +167,11 @@ exports.updateBookingStatus = async (req, res) => {
       transportData = transportResult.rows[0];
     }
 
-    // Send WhatsApp notification
+    await pool.query('COMMIT');
+
+    // Send WhatsApp notification outside transaction
     await sendStatusUpdate(result.rows[0].mobile_number, status, transportData);
 
-    await pool.query('COMMIT');
     res.status(200).json({ message: 'Status updated successfully', data: result.rows[0] });
   } catch (err) {
     await pool.query('ROLLBACK');
@@ -250,10 +248,11 @@ exports.updateFilterBookingStatus = async (req, res) => {
       transportData = transportResult.rows[0];
     }
 
-    // Send WhatsApp notification
+    await pool.query('COMMIT');
+
+    // Send WhatsApp notification outside transaction
     await sendStatusUpdate(result.rows[0].mobile_number, status, transportData);
 
-    await pool.query('COMMIT');
     res.status(200).json({ message: 'Status updated successfully', data: result.rows[0] });
   } catch (err) {
     await pool.query('ROLLBACK');
