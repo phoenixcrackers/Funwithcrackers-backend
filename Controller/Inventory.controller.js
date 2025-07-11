@@ -297,7 +297,33 @@ exports.deleteProduct = async (req, res) => {
     res.status(500).json({ message: 'Failed to delete product' });
   }
 };
+
 exports.toggleFastRunning = async (req, res) => {
+  try {
+    const { tableName, id } = req.params;
+
+    const result = await pool.query(
+      `SELECT fast_running FROM public.${tableName} WHERE id = $1`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    const current = result.rows[0].fast_running;
+    const updated = !current;
+
+    await pool.query(
+      `UPDATE public.${tableName} SET fast_running = $1 WHERE id = $2`,
+      [updated, id]
+    );
+
+    res.status(200).json({ message: 'Fast running status updated', fast_running: updated });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to update fast running status' });
+  }
 };
 exports.toggleProductStatus = async (req, res) => {
   try {
