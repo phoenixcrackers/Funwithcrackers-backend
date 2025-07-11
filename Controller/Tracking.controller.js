@@ -1,7 +1,6 @@
 const { Pool } = require('pg');
 const axios = require('axios');
 
-// Database connection
 const pool = new Pool({
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
@@ -10,11 +9,9 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
 });
 
-// WhatsApp configuration
 const ACCESS_TOKEN = 'EAAKZAUdN55kEBPLcupTZAXpIZCAszZBupSiKxRCWe5zYiZB0LZCuUFl3vTLjWDBuAgU1u6f29S8e2XkdzgrSfn8PpiT0jLSZCAOU9aGhDoOlTL9MrxZBgG0vZBCDt3dHLFlM2GHOrwvJP2WjZB2yQix9FOh6Wduq1LhXgJQpHYTYoBGbiTc8ek9LAZBXeXjPQJa8QaPAvvbcGwPIAw63P1dOAX4qfqC8AS7fJDKZAZBLbLmXEM8Hv';
 const PHONE_NUMBER_ID = '660922473779560';
 
-// Create transport_details table
 const createTransportTable = `
   CREATE TABLE IF NOT EXISTS transport_details (
     id SERIAL PRIMARY KEY,
@@ -26,7 +23,6 @@ const createTransportTable = `
   )
 `;
 
-// Execute table creation
 pool.query(createTransportTable).catch(err => console.error('Error creating transport table:', err));
 
 // Send WhatsApp status update notification
@@ -90,7 +86,6 @@ async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
     console.log(JSON.stringify(res.data, null, 2));
   } catch (err) {
     console.error('Error sending WhatsApp status update:', err.response ? JSON.stringify(err.response.data, null, 2) : err.message);
-    // Do not throw error here to allow status update to proceed
   }
 }
 
@@ -137,7 +132,6 @@ exports.updateBookingStatus = async (req, res) => {
 
     await pool.query('BEGIN');
 
-    // Update booking status and fetch mobile_number
     const query = `
       UPDATE public.bookings
       SET status = $1
@@ -169,7 +163,6 @@ exports.updateBookingStatus = async (req, res) => {
 
     await pool.query('COMMIT');
 
-    // Send WhatsApp notification outside transaction
     await sendStatusUpdate(result.rows[0].mobile_number, status, transportData);
 
     res.status(200).json({ message: 'Status updated successfully', data: result.rows[0] });
@@ -218,7 +211,6 @@ exports.updateFilterBookingStatus = async (req, res) => {
 
     await pool.query('BEGIN');
 
-    // Update booking status and fetch mobile_number
     const query = `
       UPDATE public.bookings
       SET status = $1
@@ -250,7 +242,6 @@ exports.updateFilterBookingStatus = async (req, res) => {
 
     await pool.query('COMMIT');
 
-    // Send WhatsApp notification outside transaction
     await sendStatusUpdate(result.rows[0].mobile_number, status, transportData);
 
     res.status(200).json({ message: 'Status updated successfully', data: result.rows[0] });

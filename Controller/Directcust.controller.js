@@ -35,7 +35,6 @@ exports.addCustomer = async (req, res) => {
   try {
     let finalAgentId = agent_id;
 
-    // Handle Agent creation
     if (customer_type === 'Agent') {
       const agentResult = await pool.query(
         `INSERT INTO public.customers (customer_name, state, district, mobile_number, email, address, customer_type)
@@ -54,16 +53,13 @@ exports.addCustomer = async (req, res) => {
       return res.status(201).json({ id: finalAgentId, message: 'Agent created successfully' });
     }
 
-    // Validate agent_id for Customer of Selected Agent
     if (customer_type === 'Customer of Selected Agent' && !agent_id) {
       return res.status(400).json({ error: 'Agent ID is required for Customer of Selected Agent.' });
     }
 
-    // Determine which fields to use based on customer_type
     let insertName, insertState, insertDistrict, insertMobile, insertEmail, insertAddress;
 
     if (customer_type === 'Customer of Selected Agent') {
-      // Map custAgent fields for Customer of Selected Agent
       insertName = cust_agent_name || null;
       insertState = cust_agent_state || null;
       insertDistrict = cust_agent_district || null;
@@ -71,7 +67,6 @@ exports.addCustomer = async (req, res) => {
       insertEmail = cust_agent_email || null;
       insertAddress = cust_agent_address || null;
     } else {
-      // Use regular customer fields for Customer
       insertName = customer_name || null;
       insertState = state || null;
       insertDistrict = district || null;
@@ -80,7 +75,6 @@ exports.addCustomer = async (req, res) => {
       insertAddress = address || null;
     }
 
-    // Insert customer data
     const result = await pool.query(
       `INSERT INTO public.customers (customer_name, state, district, mobile_number, email, address, customer_type, agent_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,

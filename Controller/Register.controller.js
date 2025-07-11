@@ -114,12 +114,10 @@ exports.updateUserDetails = async (req, res) => {
     const { username } = req.params;
     const { companyname, licencenumber, address, state, district, mobile_number } = req.body;
 
-    // Validate required fields
     if (!companyname || !address || !state || !district || !mobile_number) {
       return res.status(400).json({ message: 'Please provide all required fields' });
     }
 
-    // Check if mobile number is already used by another user
     const mobileExists = await pool.query(
       'SELECT * FROM public.users WHERE mobile_number = $1 AND username != $2',
       [mobile_number, username]

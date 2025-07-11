@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const { Pool } = require('pg');
 
-// Use same database connection
 const pool = new Pool({
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
@@ -11,7 +10,6 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
 });
 
-// GET all promocodes
 router.get('/promocodes', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM promocodes ORDER BY id DESC');

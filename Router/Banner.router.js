@@ -4,7 +4,6 @@ const multer = require('multer');
 const path = require('path');
 const { Pool } = require('pg');
 
-// PostgreSQL pool setup (use .env for credentials)
 const pool = new Pool({
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
@@ -13,14 +12,12 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
 });
 
-// Ensure /Uploads directory exists
 const fs = require('fs');
 const uploadsDir = path.join(__dirname, '..', 'Uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir);
 }
 
-// Multer config
 const storage = multer.diskStorage({
   destination: './Uploads/',
   filename: (req, file, cb) => {
@@ -44,7 +41,6 @@ const upload = multer({
   fileFilter,
 });
 
-// ✅ POST /api/banners/upload - Upload multiple images
 router.post('/banners/upload', upload.array('images', 10), async (req, res) => {
   try {
     const files = req.files;
@@ -71,7 +67,6 @@ router.post('/banners/upload', upload.array('images', 10), async (req, res) => {
   }
 });
 
-// ✅ GET /api/banners - Fetch all banners
 router.get('/banners', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM banners ORDER BY uploaded_at DESC');
@@ -85,7 +80,6 @@ router.delete('/banners/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Get the image path before deletion
     const { rows } = await pool.query('SELECT image_url FROM banners WHERE id = $1', [id]);
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Banner not found' });
@@ -93,14 +87,11 @@ router.delete('/banners/:id', async (req, res) => {
 
     const imagePath = path.join(__dirname, '..', rows[0].image_url);
 
-    // Delete the banner record
     await pool.query('DELETE FROM banners WHERE id = $1', [id]);
 
-    // Delete the file from disk
     fs.unlink(imagePath, (err) => {
       if (err) {
         console.warn('File deletion failed:', err.message);
-        // Not critical, so continue
       }
     });
 
@@ -110,7 +101,7 @@ router.delete('/banners/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete banner' });
   }
 });
-// ✅ PATCH /api/banners/:id - Toggle banner active state
+
 router.patch('/banners/:id', async (req, res) => {
   const { id } = req.params;
   const { is_active } = req.body;
