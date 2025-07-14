@@ -23,23 +23,29 @@ const createTransportTable = `
   )
 `;
 
-pool.query(createTransportTable).catch(err => console.error('Error creating transport table:', err));
+const alterBookingsTable = `
+  ALTER TABLE bookings
+  ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20),
+  ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(100)
+`;
 
-// Send WhatsApp status update notification
+pool.query(createTransportTable).catch((err) => console.error('Error creating transport table:', err));
+pool.query(alterBookingsTable).catch((err) => console.error('Error altering bookings table:', err));
+
 async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
-  let recipientNumber = mobileNumber;
-  if (!recipientNumber) {
-    throw new Error('Mobile number is missing');
+  if (!mobileNumber) {
+    console.warn('Mobile number is missing; skipping WhatsApp notification');
+    return;
   }
-  recipientNumber = recipientNumber.replace(/\D/g, '');
-  if (!recipientNumber.startsWith('+')) {
-    if (recipientNumber.length === 10) {
-      recipientNumber = `+91${recipientNumber}`;
-    } else if (recipientNumber.length === 12 && recipientNumber.startsWith('91')) {
-      recipientNumber = `+${recipientNumber}`;
-    } else {
-      throw new Error('Invalid mobile number format');
-    }
+
+  let recipientNumber = mobileNumber.replace(/\D/g, '');
+  if (recipientNumber.length === 10) {
+    recipientNumber = `+91${recipientNumber}`;
+  } else if (recipientNumber.length === 12 && recipientNumber.startsWith('91')) {
+    recipientNumber = `+${recipientNumber}`;
+  } else {
+    console.warn(`Invalid mobile number format: ${mobileNumber}; skipping WhatsApp notification`);
+    return;
   }
 
   const payload = {
@@ -58,17 +64,17 @@ async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
               ? [
                   { type: 'text', text: transportDetails.transport_name || 'N/A' },
                   { type: 'text', text: transportDetails.lr_number || 'N/A' },
-                  { type: 'text', text: transportDetails.transport_contact || 'N/A' }
+                  { type: 'text', text: transportDetails.transport_contact || 'N/A' },
                 ]
               : [
                   { type: 'text', text: 'N/A' },
                   { type: 'text', text: 'N/A' },
-                  { type: 'text', text: 'N/A' }
-                ])
-          ]
-        }
-      ]
-    }
+                  { type: 'text', text: 'N/A' },
+                ]),
+          ],
+        },
+      ],
+    },
   };
 
   try {
@@ -78,8 +84,8 @@ async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
       {
         headers: {
           Authorization: `Bearer ${ACCESS_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
+          'Content-Type': 'application/json',
+        },
       }
     );
     console.log(`✅ Status update sent to ${recipientNumber} for status: ${status}`);
@@ -93,7 +99,7 @@ exports.getAllBookings = async (req, res) => {
   try {
     const { status, customerType } = req.query;
     let query = `
-      SELECT id, order_id, customer_name, district, state, status, customer_type, total
+      SELECT id, order_id, customer_name, district, state, status, customer_type, total, payment_method, transaction_id
       FROM public.bookings
     `;
     const conditions = [];
@@ -124,21 +130,27 @@ exports.getAllBookings = async (req, res) => {
 exports.updateBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, transportDetails } = req.body;
+    const { status, payment_method, transaction_id, transportDetails } = req.body;
     const validStatuses = ['booked', 'paid', 'packed', 'dispatched', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
+    if (status === 'paid' && payment_method === 'bank' && !transaction_id) {
+      return res.status(400).json({ message: 'Transaction ID is required for bank payments' });
+    }
+
     await pool.query('BEGIN');
 
-    const query = `
+    let query = `
       UPDATE public.bookings
-      SET status = $1
+      SET status = $1, payment_method = $3, transaction_id = $4
       WHERE id = $2
-      RETURNING id, order_id, status, mobile_number
+      RETURNING id, order_id, status, mobile_number, payment_method, transaction_id
     `;
-    const result = await pool.query(query, [status, id]);
+    const params = [status, id, payment_method || null, transaction_id || null];
+
+    const result = await pool.query(query, params);
 
     if (result.rows.length === 0) {
       await pool.query('ROLLBACK');
@@ -156,7 +168,7 @@ exports.updateBookingStatus = async (req, res) => {
         result.rows[0].order_id,
         transportDetails.transportName,
         transportDetails.lrNumber,
-        transportDetails.transportContact || null
+        transportDetails.transportContact || null,
       ]);
       transportData = transportResult.rows[0];
     }
@@ -178,7 +190,7 @@ exports.getFilteredBookings = async (req, res) => {
     const { status } = req.query;
     const allowedStatuses = ['paid', 'packed', 'dispatched', 'delivered'];
     let query = `
-      SELECT b.id, b.order_id, b.customer_name, b.district, b.state, b.status, b.products, b.address, b.created_at, b.mobile_number, t.transport_name, t.lr_number, t.transport_contact
+      SELECT b.id, b.order_id, b.customer_name, b.district, b.state, b.status, b.products, b.address, b.created_at, b.mobile_number, b.payment_method, b.transaction_id, t.transport_name, t.lr_number, t.transport_contact
       FROM public.bookings b
       LEFT JOIN transport_details t ON b.order_id = t.order_id
       WHERE b.status = ANY($1)
@@ -189,9 +201,11 @@ exports.getFilteredBookings = async (req, res) => {
       params.push(status);
     }
     const result = await pool.query(query, params);
-    const bookingsWithTotal = result.rows.map(booking => ({
+    const bookingsWithTotal = result.rows.map((booking) => ({
       ...booking,
-      total: booking.products.reduce((sum, product) => sum + (parseFloat(product.price) * product.quantity), 0)
+      total: booking.products && Array.isArray(booking.products)
+        ? booking.products.reduce((sum, product) => sum + (parseFloat(product.price) || 0) * (product.quantity || 0), 0)
+        : 0,
     }));
     res.status(200).json(bookingsWithTotal);
   } catch (err) {
@@ -203,21 +217,27 @@ exports.getFilteredBookings = async (req, res) => {
 exports.updateFilterBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, transportDetails } = req.body;
+    const { status, payment_method, transaction_id, transportDetails } = req.body;
     const validStatuses = ['booked', 'paid', 'packed', 'dispatched', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
+    if (status === 'paid' && payment_method === 'bank' && !transaction_id) {
+      return res.status(400).json({ message: 'Transaction ID is required for bank payments' });
+    }
+
     await pool.query('BEGIN');
 
-    const query = `
+    let query = `
       UPDATE public.bookings
-      SET status = $1
+      SET status = $1, payment_method = $3, transaction_id = $4
       WHERE id = $2
-      RETURNING id, order_id, status, mobile_number
+      RETURNING id, order_id, status, mobile_number, payment_method, transaction_id
     `;
-    const result = await pool.query(query, [status, id]);
+    const params = [status, id, payment_method || null, transaction_id || null];
+
+    const result = await pool.query(query, params);
 
     if (result.rows.length === 0) {
       await pool.query('ROLLBACK');
@@ -235,13 +255,12 @@ exports.updateFilterBookingStatus = async (req, res) => {
         result.rows[0].order_id,
         transportDetails.transportName,
         transportDetails.lrNumber,
-        transportDetails.transportContact || null
+        transportDetails.transportContact || null,
       ]);
       transportData = transportResult.rows[0];
     }
 
     await pool.query('COMMIT');
-
     await sendStatusUpdate(result.rows[0].mobile_number, status, transportData);
 
     res.status(200).json({ message: 'Status updated successfully', data: result.rows[0] });
