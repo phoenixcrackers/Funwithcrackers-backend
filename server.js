@@ -48,6 +48,13 @@ app.use('/api/direct', require('./Router/Direct.router'));
 app.use('/api/tracking', require('./Router/Tracking.router'));
 app.use('/api', require('./Router/Banner.router'));
 app.use('/api', require('./Router/Promocode.router'));
+app.use((err, req, res, next) => {
+  console.error('🔥 Error:', err.stack || err);
+  res.status(500).json({
+    success: false,
+    error: err.message || 'Internal Server Error',
+  });
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
