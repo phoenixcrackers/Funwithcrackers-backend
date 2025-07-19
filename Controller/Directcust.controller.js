@@ -33,16 +33,31 @@ exports.addCustomer = async (req, res) => {
   } = req.body;
 
   try {
+    // Helper function to fetch district name by ID and state
+    const getDistrictName = async (districtId, stateName) => {
+      if (!districtId) return null;
+      const tableName = `districts_${stateName.toLowerCase().replace(/\s+/g, '_')}`;
+      const result = await pool.query(
+        `SELECT name FROM ${tableName} WHERE id = $1`,
+        [districtId]
+      );
+      if (result.rows.length === 0) {
+        throw new Error(`District with ID ${districtId} not found for state ${stateName}`);
+      }
+      return result.rows[0].name;
+    };
+
     let finalAgentId = agent_id;
 
     if (customer_type === 'Agent') {
+      const agentDistrictName = await getDistrictName(agent_district, agent_state);
       const agentResult = await pool.query(
         `INSERT INTO public.customers (customer_name, state, district, mobile_number, email, address, customer_type)
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [
           agent_name || null,
           agent_state || null,
-          agent_district || null,
+          agentDistrictName,
           agent_contact || null,
           agent_email || null,
           address || null,
@@ -60,16 +75,18 @@ exports.addCustomer = async (req, res) => {
     let insertName, insertState, insertDistrict, insertMobile, insertEmail, insertAddress;
 
     if (customer_type === 'Customer of Selected Agent') {
+      const custAgentDistrictName = await getDistrictName(cust_agent_district, cust_agent_state);
       insertName = cust_agent_name || null;
       insertState = cust_agent_state || null;
-      insertDistrict = cust_agent_district || null;
+      insertDistrict = custAgentDistrictName;
       insertMobile = cust_agent_contact || null;
       insertEmail = cust_agent_email || null;
       insertAddress = cust_agent_address || null;
     } else {
+      const districtName = await getDistrictName(district, state);
       insertName = customer_name || null;
       insertState = state || null;
-      insertDistrict = district || null;
+      insertDistrict = districtName;
       insertMobile = mobile_number || null;
       insertEmail = email || null;
       insertAddress = address || null;
