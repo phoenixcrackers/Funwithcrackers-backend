@@ -31,10 +31,10 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       // Header
       doc.fontSize(20).font('Helvetica-Bold').text(type === 'quotation' ? 'Quotation' : 'Estimate Bill', 50, 50, { align: 'center' });
       doc.fontSize(12).font('Helvetica')
-        .text('Madhu Nisha Crackers', 50, 80)
+        .text('Phoenix Crackers', 50, 80)
         .text('Sivakasi', 50, 95)
-        .text('Mobile: +91 94875 24689', 50, 110)
-        .text('Email: madhunishacrackers@gmail.com', 50, 125);
+        .text('Mobile: +91 63836 59214', 50, 110)
+        .text('Email: nivasramasamy27@gmail.com', 50, 125);
 
       // Customer Details
       const customerType = data.customer_type === 'Customer of Selected Agent' ? 'Customer - Agent' : data.customer_type || 'User';
@@ -263,8 +263,8 @@ async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, 
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: 'madhunishapyrotechsivakasi@gmail.com',
-        pass: 'bhgf kqog gmfz oqfl'
+        user: 'phoenixcrackersfwc@gmail.com',
+        pass: 'eegm mdht oehj bbhg'
       }
     });
 
@@ -273,7 +273,7 @@ async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, 
     ).join('\n');
 
     const mailOptions = {
-      from: '"Phoenix Crackers" <madhunishapyrotechsivakasi@gmail.com>',
+      from: '"Phoenix Crackers" <nivasramasamy27@gmail.com>',
       to: toEmail,
       subject: `New ${type === 'quotation' ? 'Quotation' : 'Booking'}: ${bookingData.quotation_id || bookingData.order_id}`,
       text: `
@@ -487,7 +487,7 @@ exports.createQuotation = async (req, res) => {
     }
 
     await sendBookingEmail(
-      'madhunishacrackers@gmail.com',
+      'nivasramasamy27@gmail.com',
       {
         quotation_id,
         customer_type: finalCustomerType,
@@ -601,7 +601,7 @@ exports.updateQuotation = async (req, res) => {
       }
 
       await sendBookingEmail(
-        'madhunishacrackers@gmail.com',
+        'nivasramasamy27@gmail.com',
         {
           quotation_id,
           customer_type: quotation.customer_type,
@@ -765,7 +765,7 @@ exports.getQuotation = async (req, res) => {
       );
 
       await sendBookingEmail(
-        'madhunishacrackers@gmail.com',
+        'nivasramasamy27@gmail.com',
         {
           quotation_id,
           customer_type,
@@ -921,7 +921,7 @@ exports.createBooking = async (req, res) => {
 
     // Send email with PDF
     await sendBookingEmail(
-      'madhunishacrackers@gmail.com',
+      'nivasramasamy27@gmail.com',
       {
         order_id,
         customer_type: finalCustomerType,
@@ -1011,7 +1011,7 @@ exports.getInvoice = async (req, res) => {
       );
 
       await sendBookingEmail(
-        'madhunishacrackers@gmail.com',
+        'nivasramasamy27@gmail.com',
         {
           order_id,
           customer_type,
