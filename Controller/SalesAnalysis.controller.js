@@ -107,17 +107,16 @@ exports.getSalesAnalysis = async (req, res) => {
       revenue: data.revenue
     })).sort((a, b) => a.month.localeCompare(b.month));
 
-    // Fetch profitability metrics (Updated: total_revenue = net_rate + processing_fee)
+    // Fetch profitability metrics (Updated: removed processing_fee)
     const profitability = await pool.query(`
       SELECT 
-        SUM((net_rate::numeric + COALESCE(processing_fee::numeric, 0))) AS total_revenue,
-        SUM(COALESCE(processing_fee::numeric, 0)) AS total_fees,
+        SUM(net_rate::numeric) AS total_revenue,
         SUM(COALESCE(you_save::numeric, 0)) AS total_discounts
       FROM public.bookings
       WHERE status = 'booked'
     `);
 
-    const profitData = profitability.rows[0] || { total_revenue: 0, total_fees: 0, total_discounts: 0 };
+    const profitData = profitability.rows[0] || { total_revenue: 0, total_discounts: 0 };
 
     // Fetch quotation conversion rates
     const quotations = await pool.query(`
@@ -180,7 +179,6 @@ exports.getSalesAnalysis = async (req, res) => {
       trends: trendData,
       profitability: {
         total_revenue: parseFloat(profitData.total_revenue) || 0,
-        total_fees: parseFloat(profitData.total_fees) || 0,
         total_discounts: parseFloat(profitData.total_discounts) || 0,
         estimated_profit: (parseFloat(profitData.total_revenue) || 0) - (parseFloat(profitData.total_discounts) || 0)
       },
