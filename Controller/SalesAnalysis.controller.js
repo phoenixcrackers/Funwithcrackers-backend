@@ -10,11 +10,7 @@ const pool = new Pool({
 
 exports.getSalesAnalysis = async (req, res) => {
   try {
-    // Fetch latest sales analysis record
-    const latest = await pool.query('SELECT * FROM public.sales_analysis ORDER BY created_at DESC LIMIT 1');
-    const latestData = latest.rows[0] || {};
-
-    // Fetch all products from bookings and quotations
+    // Fetch products from bookings and quotations
     const products = await pool.query(`
       SELECT 
         jsonb_array_elements(products::jsonb)->>'productname' AS productname,
@@ -32,27 +28,30 @@ exports.getSalesAnalysis = async (req, res) => {
       FROM public.fwcquotations
       WHERE status = 'booked'
     `);
+
     const productSummary = products.rows.reduce((acc, row) => {
       const { productname, quantity, price, discount } = row;
+      if (!productname) return acc; // Skip invalid products
       if (!acc[productname]) {
         acc[productname] = { quantity: 0, revenue: 0, discount: 0 };
       }
       const unitPrice = parseFloat(price) || 0;
       const unitDiscount = parseFloat(discount) || 0;
-      const unitQuantity = parseInt(quantity) || 1;
+      const unitQuantity = parseInt(quantity) || 0;
       acc[productname].quantity += unitQuantity;
       acc[productname].revenue += unitQuantity * (unitPrice - (unitPrice * unitDiscount / 100));
       acc[productname].discount += unitQuantity * (unitPrice * unitDiscount / 100);
       return acc;
     }, {});
+
     const productData = Object.entries(productSummary).map(([productname, data]) => ({
       productname,
       quantity: data.quantity,
       revenue: data.revenue,
-      avg_discount: data.quantity > 0 ? (data.discount / (data.quantity * data.revenue / (data.quantity - data.discount))) * 100 : 0
+      avg_discount: data.quantity > 0 ? (data.discount / (data.quantity * (data.revenue + data.discount) / data.quantity)) * 100 : 0
     }));
 
-    // Fetch all cities from bookings and quotations
+    // Fetch regional demand (cities)
     const cities = await pool.query(`
       SELECT district, COUNT(*) AS count, SUM(total::numeric) AS revenue
       FROM public.bookings
@@ -64,28 +63,33 @@ exports.getSalesAnalysis = async (req, res) => {
       WHERE status = 'booked'
       GROUP BY district
     `);
+
     const citySummary = cities.rows.reduce((acc, row) => {
-      if (!acc[row.district]) {
-        acc[row.district] = { count: 0, revenue: 0 };
+      const district = row.district || 'Unknown';
+      if (!acc[district]) {
+        acc[district] = { count: 0, revenue: 0 };
       }
-      acc[row.district].count += parseInt(row.count);
-      acc[row.district].revenue += parseFloat(row.revenue) || 0;
+      acc[district].count += parseInt(row.count);
+      acc[district].revenue += parseFloat(row.revenue) || 0;
       return acc;
     }, {});
+
     const cityData = Object.entries(citySummary).map(([district, data]) => ({
       district,
       count: data.count,
       revenue: data.revenue
     }));
 
-    // Fetch historical sales data for trends
+    // Fetch historical trends
     const historical = await pool.query(`
       SELECT 
-        created_at,
-        highest_total
+        analysis_date, 
+        highest_total,
+        created_at
       FROM public.sales_analysis 
-      ORDER BY created_at ASC
+      ORDER BY analysis_date ASC
     `);
+
     const monthlyTrends = historical.rows.reduce((acc, row) => {
       const date = new Date(row.created_at);
       const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -96,21 +100,24 @@ exports.getSalesAnalysis = async (req, res) => {
       acc[monthYear].revenue += parseFloat(row.highest_total) || 0;
       return acc;
     }, {});
+
     const trendData = Object.entries(monthlyTrends).map(([month, data]) => ({
       month,
       volume: data.volume,
       revenue: data.revenue
     })).sort((a, b) => a.month.localeCompare(b.month));
 
-    // Fetch profitability metrics (excluding processing_fee)
+    // Fetch profitability metrics (Updated: total_revenue = net_rate + processing_fee)
     const profitability = await pool.query(`
       SELECT 
-        SUM(total::numeric) AS total_revenue,
-        SUM(you_save::numeric) AS total_discounts
+        SUM((net_rate::numeric + COALESCE(processing_fee::numeric, 0))) AS total_revenue,
+        SUM(COALESCE(processing_fee::numeric, 0)) AS total_fees,
+        SUM(COALESCE(you_save::numeric, 0)) AS total_discounts
       FROM public.bookings
       WHERE status = 'booked'
     `);
-    const profitData = profitability.rows[0] || { total_revenue: 0, total_discounts: 0 };
+
+    const profitData = profitability.rows[0] || { total_revenue: 0, total_fees: 0, total_discounts: 0 };
 
     // Fetch quotation conversion rates
     const quotations = await pool.query(`
@@ -118,6 +125,7 @@ exports.getSalesAnalysis = async (req, res) => {
       FROM public.fwcquotations
       GROUP BY status
     `);
+
     const quotationSummary = quotations.rows.reduce((acc, row) => {
       acc[row.status] = { count: parseInt(row.count), revenue: parseFloat(row.revenue) || 0 };
       return acc;
@@ -133,6 +141,7 @@ exports.getSalesAnalysis = async (req, res) => {
       WHERE status = 'booked'
       GROUP BY customer_type
     `);
+
     const customerTypeData = customerTypes.rows.map(row => ({
       customer_type: row.customer_type || 'Unknown',
       count: parseInt(row.count),
@@ -157,6 +166,7 @@ exports.getSalesAnalysis = async (req, res) => {
       FROM public.fwcquotations
       WHERE status = 'canceled'
     `);
+
     const cancellationData = cancellations.rows.map(row => ({
       type: row.type,
       order_id: row.order_id,
@@ -165,12 +175,12 @@ exports.getSalesAnalysis = async (req, res) => {
     }));
 
     res.status(200).json({
-      ...latestData,
       products: productData,
       cities: cityData,
       trends: trendData,
       profitability: {
         total_revenue: parseFloat(profitData.total_revenue) || 0,
+        total_fees: parseFloat(profitData.total_fees) || 0,
         total_discounts: parseFloat(profitData.total_discounts) || 0,
         estimated_profit: (parseFloat(profitData.total_revenue) || 0) - (parseFloat(profitData.total_discounts) || 0)
       },
