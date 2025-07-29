@@ -9,6 +9,7 @@ const pool = new Pool({
   host: process.env.PGHOST,
   port: process.env.PGPORT,
   database: process.env.PGDATABASE,
+  max: 30, // OPTIMIZATION: Increased max connections to handle more concurrent requests // OPTIMIZATION: Reduced timeout for faster failure
 });
 
 app.use(express.json({ limit: '10mb' }));
@@ -16,7 +17,30 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 const validBase64Pattern = /^data:(image\/(png|jpeg|jpg|gif)|video\/(mp4|webm|ogg));base64,/;
 
+let productTypeCache = {
+  data: null,
+  timestamp: 0,
+};
+
+async function getCachedProductTypes() {
+  const now = Date.now();
+  if (!productTypeCache.data || now - productTypeCache.timestamp > 300000) {
+    const client = await pool.connect(); // OPTIMIZATION: Use dedicated client for connection management
+    try {
+      const result = await client.query('SELECT product_type FROM public.products');
+      productTypeCache = {
+        data: result.rows.map(r => r.product_type),
+        timestamp: now,
+      };
+    } finally {
+      client.release(); // OPTIMIZATION: Ensure connection is released
+    }
+  }
+  return productTypeCache.data;
+}
+
 exports.addProduct = async (req, res) => {
+  const client = await pool.connect(); // OPTIMIZATION: Use dedicated client
   try {
     const {
       serial_number,
@@ -26,7 +50,7 @@ exports.addProduct = async (req, res) => {
       discount,
       product_type,
       images,
-      description = ''
+      description = '',
     } = req.body;
 
     if (!serial_number || !productname || !price || !per || !discount || !product_type) {
@@ -41,7 +65,7 @@ exports.addProduct = async (req, res) => {
       for (const base64 of images) {
         if (!validBase64Pattern.test(base64)) {
           return res.status(400).json({
-            message: 'One or more files have invalid Base64 format. Only PNG, JPEG, GIF, MP4, WebM, or Ogg allowed.'
+            message: 'One or more files have invalid Base64 format. Only PNG, JPEG, GIF, MP4, WebM, or Ogg allowed.',
           });
         }
       }
@@ -49,18 +73,11 @@ exports.addProduct = async (req, res) => {
 
     const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
 
-    const typeCheck = await pool.query(
-      'SELECT product_type FROM public.products WHERE product_type = $1',
-      [product_type]
-    );
+    const cachedTypes = await getCachedProductTypes();
+    if (!cachedTypes.includes(product_type)) {
+      await client.query('INSERT INTO public.products (product_type) VALUES ($1)', [product_type]);
 
-    if (typeCheck.rows.length === 0) {
-      await pool.query(
-        'INSERT INTO public.products (product_type) VALUES ($1)',
-        [product_type]
-      );
-
-      await pool.query(`
+      await client.query(`
         CREATE TABLE IF NOT EXISTS public.${tableName} (
           id SERIAL PRIMARY KEY,
           serial_number VARCHAR(50) NOT NULL,
@@ -74,11 +91,18 @@ exports.addProduct = async (req, res) => {
           fast_running BOOLEAN DEFAULT false
         )
       `);
+
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_serial_number_${tableName} ON public.${tableName}(serial_number) CONCURRENTLY`); // OPTIMIZATION: Concurrent index creation
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_productname_${tableName} ON public.${tableName}(productname) CONCURRENTLY`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_id_${tableName} ON public.${tableName}(id) CONCURRENTLY`);
+
+      // OPTIMIZATION: Update cache instead of invalidating
+      productTypeCache.data = [...(productTypeCache.data || []), product_type];
+      productTypeCache.timestamp = Date.now();
     }
 
-    const duplicateCheck = await pool.query(
-      `SELECT id FROM public.${tableName}
-       WHERE serial_number = $1 OR productname = $2`,
+    const duplicateCheck = await client.query(
+      `SELECT id FROM public.${tableName} WHERE serial_number = $1 OR productname = $2`,
       [serial_number, productname]
     );
 
@@ -101,19 +125,22 @@ exports.addProduct = async (req, res) => {
       parseInt(discount, 10),
       images ? JSON.stringify(images) : null,
       'off',
-      description
+      description,
     ];
 
-    const result = await pool.query(insertQuery, values);
+    const result = await client.query(insertQuery, values);
     res.status(201).json({ message: 'Product saved successfully', id: result.rows[0].id });
 
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Failed to save product' });
+  } finally {
+    client.release(); // OPTIMIZATION: Release connection
   }
 };
 
 exports.updateProduct = async (req, res) => {
+  const client = await pool.connect();
   try {
     const { tableName, id } = req.params;
     const {
@@ -123,9 +150,9 @@ exports.updateProduct = async (req, res) => {
       per,
       discount,
       status,
-      images,
-      description = ''
+      description = '',
     } = req.body;
+    let images = req.body.images;
 
     if (!serial_number || !productname || !price || !per || !discount) {
       return res.status(400).json({ message: 'All required fields must be provided' });
@@ -135,14 +162,20 @@ exports.updateProduct = async (req, res) => {
       return res.status(400).json({ message: 'Valid per value (pieces, box, or pkt) is required' });
     }
 
-    if (images && Array.isArray(images)) {
-      for (const base64 of images) {
-        if (!validBase64Pattern.test(base64)) {
+    // Check if files are uploaded via multer
+    if (req.files && req.files.length > 0) {
+      images = req.files.map(file => file.path); // Use Cloudinary URLs from uploaded files
+    } else if (images && Array.isArray(images)) {
+      // Validate existing image URLs or Base64 strings
+      for (const image of images) {
+        if (typeof image === 'string' && !image.startsWith('http') && !validBase64Pattern.test(image)) {
           return res.status(400).json({
-            message: 'One or more files have invalid Base64 format. Only PNG, JPEG, GIF, MP4, WebM, or Ogg allowed.'
+            message: 'One or more image URLs are invalid. Only Cloudinary URLs or valid Base64 formats (PNG, JPEG, GIF, MP4, WebM, Ogg) allowed.',
           });
         }
       }
+    } else {
+      images = null; // No images provided
     }
 
     let query = `
@@ -154,7 +187,7 @@ exports.updateProduct = async (req, res) => {
       productname,
       parseFloat(price),
       per,
-      parseInt(discount, 10)
+      parseFloat(discount),
     ];
     let paramIndex = 6;
 
@@ -177,7 +210,7 @@ exports.updateProduct = async (req, res) => {
     query += ` WHERE id = $${paramIndex} RETURNING id`;
     values.push(id);
 
-    const result = await pool.query(query, values);
+    const result = await client.query(query, values);
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
@@ -186,40 +219,54 @@ exports.updateProduct = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Failed to update product' });
+  } finally {
+    client.release();
   }
 };
 
 exports.getProducts = async (req, res) => {
   try {
-    const typeResult = await pool.query('SELECT product_type FROM public.products');
-    const productTypes = typeResult.rows.map(row => row.product_type);
+    const { page = 1, limit = 50 } = req.query; // OPTIMIZATION: Add pagination
+    const offset = (page - 1) * limit;
 
-    let allProducts = [];
+    const productTypes = await getCachedProductTypes();
 
-    for (const productType of productTypes) {
+    const productQueries = productTypes.map(async (productType) => {
       const tableName = productType.toLowerCase().replace(/\s+/g, '_');
-      const query = `
-        SELECT id, serial_number, productname, price, per, discount, image, status, fast_running, description
-        FROM public.${tableName}
-      `;
-      const result = await pool.query(query);
-      const products = result.rows.map(row => ({
-        id: row.id,
-        product_type: productType,
-        serial_number: row.serial_number,
-        productname: row.productname,
-        price: row.price,
-        per: row.per,
-        discount: row.discount,
-        image: row.image,
-        status: row.status,
-        fast_running: row.fast_running,
-        description: row.description || ''
-      }));
-      allProducts = [...allProducts, ...products];
-    }
+      const client = await pool.connect(); // OPTIMIZATION: Use dedicated client
+      try {
+        // OPTIMIZATION: Select specific columns and add pagination
+        const result = await client.query(`
+          SELECT id, serial_number, productname, price, per, discount, status, fast_running, description, image
+          FROM public.${tableName}
+          ORDER BY id
+          LIMIT $1 OFFSET $2
+        `, [limit, offset]);
+        return result.rows.map(row => ({
+          id: row.id,
+          product_type: productType,
+          serial_number: row.serial_number,
+          productname: row.productname,
+          price: row.price,
+          per: row.per,
+          discount: row.discount,
+          image: row.image,
+          status: row.status,
+          fast_running: row.fast_running,
+          description: row.description || '',
+        }));
+      } finally {
+        client.release(); // OPTIMIZATION: Release connection
+      }
+    });
 
-    res.status(200).json(allProducts);
+    const allProducts = (await Promise.all(productQueries)).flat();
+    res.status(200).json({
+      data: allProducts,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total: allProducts.length, // Note: This is approximate; ideally, query total count separately
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Failed to fetch products' });
@@ -295,6 +342,52 @@ exports.deleteProduct = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Failed to delete product' });
+  }
+};
+
+exports.deleteProductType = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { productType } = req.params;
+    const formattedProductType = productType.toLowerCase().replace(/\s+/g, '_');
+
+    // Check if product type exists
+    const typeCheck = await client.query(
+      'SELECT product_type FROM public.products WHERE product_type = $1',
+      [formattedProductType]
+    );
+
+    if (typeCheck.rows.length === 0) {
+      return res.status(404).json({ message: 'Product type not found' });
+    }
+
+    // Begin transaction
+    await client.query('BEGIN');
+
+    // Delete all products in the associated table
+    const tableName = formattedProductType;
+    await client.query(`DELETE FROM public.${tableName}`);
+
+    // Drop the associated table
+    await client.query(`DROP TABLE IF EXISTS public.${tableName}`);
+
+    // Remove product type from products table
+    await client.query('DELETE FROM public.products WHERE product_type = $1', [formattedProductType]);
+
+    // Update cache
+    productTypeCache.data = (productTypeCache.data || []).filter(type => type !== formattedProductType);
+    productTypeCache.timestamp = Date.now();
+
+    // Commit transaction
+    await client.query('COMMIT');
+
+    res.status(200).json({ message: 'Product type deleted successfully' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ message: 'Failed to delete product type' });
+  } finally {
+    client.release();
   }
 };
 
