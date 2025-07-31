@@ -34,7 +34,8 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('Phoenix Crackers', 50, 80)
         .text('Sivakasi', 50, 95)
         .text('Mobile: +91 63836 59214', 50, 110)
-        .text('Email: nivasramasamy27@gmail.com', 50, 125);
+        .text('Email: nivasramasamy27@gmail.com', 50, 125)
+        .text('Website: www.funwithcrackers.com', 50, 140);
 
       // Customer Details
       const customerType = data.customer_type === 'Customer of Selected Agent' ? 'Customer - Agent' : data.customer_type || 'User';
@@ -46,23 +47,23 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         addressLine1 = addressLine1.slice(0, splitIndex);
       }
       doc.fontSize(12).font('Helvetica')
-        .text(`${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${data.quotation_id || data.order_id}`, 300, 80, { align: 'left' })
-        .text(`Date: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}`, 300, 95, { align: 'left' })
-        .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 300, 110, { align: 'left' })
-        .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 300, 125, { align: 'left' })
-        .text(`Address: ${addressLine1}`, 300, 140, { align: 'left' })
-        .text(addressLine2, 300, 155, { align: 'left' })
-        .text(`District: ${customerDetails.district || 'N/A'}`, 300, 170, { align: 'left' })
-        .text(`State: ${customerDetails.state || 'N/A'}`, 300, 185, { align: 'left' })
-        .text(`Customer Type: ${customerType}`, 300, 200, { align: 'left' });
+        .text(`${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${data.quotation_id || data.order_id}`, 300, 80, { align: 'right' })
+        .text(`Date: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}`, 300, 95, { align: 'right' })
+        .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 300, 110, { align: 'right' })
+        .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 300, 125, { align: 'right' })
+        .text(`Address: ${addressLine1}`, 300, 140, { align: 'right' })
+        .text(addressLine2, 300, 155, { align: 'right' })
+        .text(`District: ${customerDetails.district || 'N/A'}`, 300, 170, { align: 'right' })
+        .text(`State: ${customerDetails.state || 'N/A'}`, 300, 185, { align: 'right' })
+        .text(`Customer Type: ${customerType}`, 300, 200, { align: 'right' });
       if (data.agent_name) {
-        doc.text(`Agent: ${data.agent_name}`, 300, 215, { align: 'left' });
+        doc.text(`Agent: ${data.agent_name}`, 300, 215, { align: 'right' });
       }
 
       // Table Setup
       const tableY = 250;
       const tableWidth = 500;
-      const colWidths = [50, 150, 100, 100, 100]; // Adjusted for better product name display
+      const colWidths = [50, 150, 100, 100, 100];
       const colX = [50, 100, 250, 350, 450];
       const rowHeight = 25;
       const pageHeight = doc.page.height - doc.page.margins.bottom;
@@ -86,11 +87,9 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       // Table Rows
       let y = tableY + rowHeight;
       products.forEach((product, index) => {
-        // Check for page overflow
         if (y + rowHeight > pageHeight - 50) {
           doc.addPage();
           y = doc.page.margins.top + 20;
-          // Redraw table header on new page
           doc.moveTo(50, y - 5).lineTo(50 + tableWidth, y - 5).stroke();
           doc.fontSize(10).font('Helvetica-Bold')
             .text('Sl.No', colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
@@ -108,18 +107,15 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
           y += rowHeight;
         }
 
-        // Calculate product total
         const price = parseFloat(product.price) || 0;
         const discount = parseFloat(product.discount || 0) || 0;
         const productTotal = (price - (price * discount / 100)) * (product.quantity || 1);
 
-        // Truncate long product names
         let productName = product.productname || 'N/A';
         if (productName.length > 30) {
           productName = productName.substring(0, 27) + '...';
         }
 
-        // Draw row content
         doc.font('Helvetica')
           .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
           .text(productName, colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
@@ -127,7 +123,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
           .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'right' })
           .text(`Rs.${productTotal.toFixed(2)}`, colX[4] + 5, y, { width: colWidths[4] - 10, align: 'right' });
 
-        // Draw row lines
         doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
         colX.forEach((x, i) => {
           doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
@@ -139,9 +134,8 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         y += rowHeight;
       });
 
-      // Totals Section
-      y += 10; // Space after table
-      if (y + 90 > pageHeight - 50) { // Check if totals fit on current page
+      y += 10;
+      if (y + 90 > pageHeight - 50) {
         doc.addPage();
         y = doc.page.margins.top + 20;
       }
@@ -157,7 +151,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       y += 20;
       doc.text(`Total: Rs.${total.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
 
-      // Footer
       y += 30;
       if (y + 50 > pageHeight - 50) {
         doc.addPage();
@@ -254,12 +247,17 @@ async function sendTemplateWithPDF(mediaId, total, customerDetails, type) {
   }
 }
 
-async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, products, type) {
+async function sendBookingEmail(toEmail, bookingData, customerDetails, status) {
   try {
-    if (!fs.existsSync(pdfPath)) {
-      console.error(`PDF file does not exist for email: ${pdfPath}`);
-      throw new Error('PDF file does not exist for email');
+    console.log(`Attempting to send email to ${toEmail} for order ${bookingData.order_id}, status: ${status}`);
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(toEmail)) {
+      console.error(`Invalid email address: ${toEmail}`);
+      throw new Error(`Invalid email address: ${toEmail}`);
     }
+
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
@@ -268,45 +266,101 @@ async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, 
       }
     });
 
-    const productList = products.map(p =>
-      `- ${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}`
-    ).join('\n');
+    let subject, text, html;
+    const idField = 'Order ID';
+    const idValue = bookingData.order_id;
 
-    const mailOptions = {
-      from: '"Phoenix Crackers" <nivasramasamy27@gmail.com>',
-      to: toEmail,
-      subject: `New ${type === 'quotation' ? 'Quotation' : 'Booking'}: ${bookingData.quotation_id || bookingData.order_id}`,
-      text: `
-A new ${type} has been made.
+    if (toEmail === 'nivasramasamy27@gmail.com') {
+      // Admin notification for status update
+      subject = `Order ${idValue} Status Updated to ${status}`;
+      text = `
+Status Update Notification for Order ${idValue}
 
+The order status has been updated to "${status}".
+
+Booking Details:
+${idField}: ${idValue}
 Customer Name: ${customerDetails.customer_name || 'N/A'}
 Mobile: ${customerDetails.mobile_number || 'N/A'}
 Email: ${customerDetails.email || 'N/A'}
 Address: ${customerDetails.address || 'N/A'}
 District: ${customerDetails.district || 'N/A'}
 State: ${customerDetails.state || 'N/A'}
-${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${bookingData.quotation_id || bookingData.order_id}
 Customer Type: ${bookingData.customer_type || 'User'}
-Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
-You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
-Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
-Products:
-${productList}
-    `,
-      attachments: [
-        {
-          filename: path.basename(pdfPath),
-          path: pdfPath,
-          contentType: 'application/pdf',
-        }
-      ]
+Best regards,
+Phoenix Crackers Team
+      `;
+      html = `
+<p><strong>Status Update Notification for Order ${idValue}</strong></p>
+<p>The order status has been updated to "${status}".</p>
+<p><strong>Booking Details:</strong></p>
+<ul>
+  <li><strong>${idField}:</strong> ${idValue}</li>
+  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
+  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
+  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
+  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
+  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
+  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
+  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
+</ul>
+<p>Best regards,<br>Phoenix Crackers Team</p>
+      `;
+    } else {
+      // Customer notification for status update
+      subject = `Order ${idValue} Status Updated to ${status}`;
+      text = `
+Dear ${customerDetails.customer_name || 'Customer'},
+
+Your order ${idValue} status has been updated to "${status}".
+
+Booking Details:
+${idField}: ${idValue}
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
+Customer Type: ${bookingData.customer_type || 'User'}
+
+For any queries, contact us at +91 63836 59214.
+
+Best regards,
+Phoenix Crackers Team
+      `;
+      html = `
+<p>Dear ${customerDetails.customer_name || 'Customer'},</p>
+<p>Your order ${idValue} status has been updated to "${status}".</p>
+<p><strong>Booking Details:</strong></p>
+<ul>
+  <li><strong>${idField}:</strong> ${idValue}</li>
+  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
+  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
+  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
+  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
+  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
+  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
+  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
+</ul>
+<p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
+<p>Best regards,<br>Phoenix Crackers Team</p>
+      `;
+    }
+
+    const mailOptions = {
+      from: '"Phoenix Crackers" <nivasramasamy27@gmail.com>',
+      to: toEmail,
+      subject,
+      text,
+      html
     };
 
     await transporter.sendMail(mailOptions);
-    console.log(`Email sent successfully to ${toEmail}`);
+    console.log(`Email sent successfully to ${toEmail} for order ${idValue}, status: ${status}`);
   } catch (err) {
-    console.error('Failed to send email:', err.message);
+    console.error(`Failed to send email to ${toEmail} for order ${bookingData.order_id}:`, err.message);
     throw err;
   }
 }
@@ -671,7 +725,7 @@ exports.updateQuotation = async (req, res) => {
       status: result.rows[0].status
     });
   } catch (err) {
-    console.error(`Failed to update quotation ${quotation_id}:`, err.message);
+    console.error(`Failed to update quotation ${req.params.quotation_id}:`, err.message);
     res.status(500).json({ message: 'Failed to update quotation', error: err.message });
   }
 };
@@ -803,19 +857,15 @@ exports.createBooking = async (req, res) => {
       customer_type, customer_name, address, mobile_number, email, district, state
     } = req.body;
 
-    // Validate order_id
     if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) 
       return res.status(400).json({ message: 'Invalid or missing Order ID' });
     
-    // Validate products
     if (!Array.isArray(products) || products.length === 0) 
       return res.status(400).json({ message: 'Products array is required and must not be empty' });
     
-    // Validate total
     if (!total || isNaN(parseFloat(total)) || parseFloat(total) <= 0) 
       return res.status(400).json({ message: 'Total must be a positive number' });
 
-    // Parse numeric fields
     const parsedNetRate = parseFloat(net_rate) || 0;
     const parsedYouSave = parseFloat(you_save) || 0;
     const parsedPromoDiscount = parseFloat(promo_discount) || 0;
@@ -824,12 +874,10 @@ exports.createBooking = async (req, res) => {
     if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedTotal].some(v => isNaN(v)))
       return res.status(400).json({ message: 'net_rate, you_save, promo_discount, and total must be valid numbers' });
 
-    // Set default customer type
     let finalCustomerType = customer_type || 'User';
     let customerDetails = { customer_name, address, mobile_number, email, district, state };
     let agent_name = null;
 
-    // Validate customer details if customer_id is provided
     if (customer_id) {
       const customerCheck = await pool.query(
         'SELECT id, customer_name, address, mobile_number, email, district, state, customer_type, agent_id FROM public.customers WHERE id = $1',
@@ -849,20 +897,17 @@ exports.createBooking = async (req, res) => {
         state: customerRow.state
       };
 
-      // Check for agent if customer_type is 'Customer of Selected Agent'
       if (finalCustomerType === 'Customer of Selected Agent' && customerRow.agent_id) {
         const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerRow.agent_id]);
         if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
       }
     } else {
-      // Validate customer details for non-registered users
       if (finalCustomerType !== 'User') 
         return res.status(400).json({ message: 'Customer type must be "User" for bookings without customer ID' });
       if (!customer_name || !address || !district || !state || !mobile_number)
         return res.status(400).json({ message: 'All customer details must be provided' });
     }
 
-    // Validate products
     for (const product of products) {
       const { id, product_type, quantity, price, discount } = product;
       if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
@@ -874,7 +919,6 @@ exports.createBooking = async (req, res) => {
         return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
     }
 
-    // Generate PDF
     const { pdfPath } = await generatePDF(
       'invoice',
       { order_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
@@ -883,10 +927,8 @@ exports.createBooking = async (req, res) => {
       { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount }
     );
 
-    // Start database transaction
     await pool.query('BEGIN');
 
-    // Insert booking into database (quotation_id set to NULL)
     const result = await pool.query(`
       INSERT INTO public.bookings 
       (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
@@ -911,7 +953,6 @@ exports.createBooking = async (req, res) => {
       pdfPath
     ]);
 
-    // Send WhatsApp PDF
     try {
       const mediaId = await uploadPDF(pdfPath);
       await sendTemplateWithPDF(mediaId, parsedTotal, customerDetails, 'invoice');
@@ -919,7 +960,7 @@ exports.createBooking = async (req, res) => {
       console.error('WhatsApp PDF sending failed:', err);
     }
 
-    // Send email with PDF
+    // Send email to admin
     await sendBookingEmail(
       'nivasramasamy27@gmail.com',
       {
@@ -935,7 +976,25 @@ exports.createBooking = async (req, res) => {
       'invoice'
     );
 
-    // Commit transaction
+    // Send email to customer if email exists
+    if (customerDetails.email) {
+      await sendBookingEmail(
+        customerDetails.email,
+        {
+          order_id,
+          customer_type: finalCustomerType,
+          net_rate: parsedNetRate,
+          you_save: parsedYouSave,
+          total: parsedTotal
+        },
+        customerDetails,
+        pdfPath,
+        products,
+        'invoice',
+        'booked'
+      );
+    }
+
     await pool.query('COMMIT');
 
     console.log(`Booking created successfully for order_id: ${order_id}`);
@@ -954,31 +1013,228 @@ exports.createBooking = async (req, res) => {
   }
 };
 
+exports.updateBooking = async (req, res) => {
+  try {
+    const { order_id } = req.params;
+    const { products, net_rate, you_save, total, promo_discount, status, transport_details } = req.body;
+
+    console.log(`Updating booking for order_id: ${order_id}, request body:`, req.body);
+
+    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) {
+      console.error(`Invalid or missing Order ID: ${order_id}`);
+      return res.status(400).json({ message: 'Invalid or missing Order ID' });
+    }
+
+    if (products && (!Array.isArray(products) || products.length === 0)) {
+      console.error(`Invalid products array for order_id: ${order_id}`);
+      return res.status(400).json({ message: 'Products array is required and must not be empty' });
+    }
+
+    if (total && (isNaN(parseFloat(total)) || parseFloat(total) <= 0)) {
+      console.error(`Invalid total for order_id: ${order_id}`);
+      return res.status(400).json({ message: 'Total must be a positive number' });
+    }
+
+    if (status && !['booked', 'paid', 'dispatched', 'canceled'].includes(status)) {
+      console.error(`Invalid status for order_id: ${order_id}: ${status}`);
+      return res.status(400).json({ message: 'Invalid status' });
+    }
+
+    // Make transport_details optional for dispatched status
+    let updatedTransportDetails = transport_details;
+    if (status === 'dispatched' && !transport_details) {
+      console.warn(`No transport details provided for dispatched status, using default for order_id: ${order_id}`);
+      updatedTransportDetails = { note: 'No transport details provided' };
+    }
+
+    const parsedNetRate = net_rate !== undefined ? parseFloat(net_rate) : undefined;
+    const parsedYouSave = you_save !== undefined ? parseFloat(you_save) : undefined;
+    const parsedPromoDiscount = promo_discount !== undefined ? parseFloat(promo_discount) : undefined;
+    const parsedTotal = total !== undefined ? parseFloat(total) : undefined;
+
+    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedTotal].some(v => v !== undefined && isNaN(v))) {
+      console.error(`Invalid numbers in request for order_id: ${order_id}`);
+      return res.status(400).json({ message: 'net_rate, you_save, total, and promo_discount must be valid numbers' });
+    }
+
+    const bookingCheck = await pool.query(
+      'SELECT * FROM public.bookings WHERE order_id = $1',
+      [order_id]
+    );
+    if (bookingCheck.rows.length === 0) {
+      console.error(`Booking not found for order_id: ${order_id}`);
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    const booking = bookingCheck.rows[0];
+    let customerDetails = {
+      customer_name: booking.customer_name,
+      address: booking.address,
+      mobile_number: booking.mobile_number,
+      email: booking.email,
+      district: booking.district,
+      state: booking.state,
+      customer_type: booking.customer_type
+    };
+
+    // Fetch customer details from customers table if customer_id exists
+    if (booking.customer_id) {
+      const customerCheck = await pool.query(
+        'SELECT customer_name, address, mobile_number, email, district, state, customer_type FROM public.customers WHERE id = $1',
+        [booking.customer_id]
+      );
+      if (customerCheck.rows.length > 0) {
+        customerDetails = customerCheck.rows[0];
+      } else {
+        console.warn(`Customer not found for customer_id: ${booking.customer_id}, using booking table data`);
+      }
+    }
+
+    if (products) {
+      for (const product of products) {
+        const { id, product_type, quantity, price, discount } = product;
+        if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount))) {
+          console.error(`Invalid product entry for order_id: ${order_id}`);
+          return res.status(400).json({ message: 'Invalid product entry' });
+        }
+
+        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+        const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [id]);
+        if (productCheck.rows.length === 0) {
+          console.error(`Product ${id} of type ${product_type} not found for order_id: ${order_id}`);
+          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
+        }
+      }
+    }
+
+    const updateFields = [];
+    const updateValues = [];
+    let paramIndex = 1;
+
+    if (products) {
+      updateFields.push(`products = $${paramIndex++}`);
+      updateValues.push(JSON.stringify(products));
+    }
+    if (parsedNetRate !== undefined) {
+      updateFields.push(`net_rate = $${paramIndex++}`);
+      updateValues.push(parsedNetRate);
+    }
+    if (parsedYouSave !== undefined) {
+      updateFields.push(`you_save = $${paramIndex++}`);
+      updateValues.push(parsedYouSave);
+    }
+    if (parsedTotal !== undefined) {
+      updateFields.push(`total = $${paramIndex++}`);
+      updateValues.push(parsedTotal);
+    }
+    if (parsedPromoDiscount !== undefined) {
+      updateFields.push(`promo_discount = $${paramIndex++}`);
+      updateValues.push(parsedPromoDiscount);
+    }
+    if (status) {
+      updateFields.push(`status = $${paramIndex++}`);
+      updateValues.push(status);
+    }
+    if (updatedTransportDetails) {
+      updateFields.push(`transport_details = $${paramIndex++}`);
+      updateValues.push(JSON.stringify(updatedTransportDetails));
+    }
+    updateFields.push(`updated_at = NOW()`);
+
+    if (updateFields.length === 1) {
+      console.error(`No fields to update for order_id: ${order_id}`);
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+
+    const query = `
+      UPDATE public.bookings 
+      SET ${updateFields.join(', ')}
+      WHERE order_id = $${paramIndex}
+      RETURNING id, order_id, status
+    `;
+    updateValues.push(order_id);
+
+    console.log(`Executing query for order_id: ${order_id}:`, query, updateValues);
+    const result = await pool.query(query, updateValues);
+
+    // Send emails if status is updated
+    if (status) {
+      const emailStatus = status;
+      console.log(`Status updated to ${emailStatus} for order_id: ${order_id}, attempting to send emails`);
+
+      // Send email to customer if email exists
+      if (customerDetails.email) {
+        console.log(`Sending customer email to ${customerDetails.email} for order_id: ${order_id}, status: ${emailStatus}`);
+        try {
+          await sendBookingEmail(
+            customerDetails.email,
+            {
+              order_id,
+              customer_type: booking.customer_type
+            },
+            customerDetails,
+            emailStatus
+          );
+          console.log(`Customer email sent successfully to ${customerDetails.email} for order_id: ${order_id}`);
+        } catch (err) {
+          console.error(`Failed to send customer email for order_id: ${order_id}:`, err.message);
+        }
+      } else {
+        console.warn(`No customer email found for order_id: ${order_id}, skipping customer email`);
+      }
+
+      // Send email to admin
+      console.log(`Sending admin email for order_id: ${order_id}, status: ${emailStatus}`);
+      try {
+        await sendBookingEmail(
+          'nivasramasamy27@gmail.com',
+          {
+            order_id,
+            customer_type: booking.customer_type
+          },
+          customerDetails,
+          emailStatus
+        );
+        console.log(`Admin email sent successfully to nivasramasamy27@gmail.com for order_id: ${order_id}`);
+      } catch (err) {
+        console.error(`Failed to send admin email for order_id: ${order_id}:`, err.message);
+      }
+    } else {
+      console.log(`No status update for order_id: ${order_id}, skipping email sending`);
+    }
+
+    console.log(`Booking updated successfully for order_id: ${order_id}`);
+    res.status(200).json({
+      message: 'Booking updated successfully',
+      id: result.rows[0].id,
+      order_id: result.rows[0].order_id,
+      status: result.rows[0].status
+    });
+  } catch (err) {
+    console.error(`Failed to update booking ${req.params.order_id}:`, err.message);
+    res.status(500).json({ message: 'Failed to update booking', error: err.message });
+  }
+};
+
 exports.getInvoice = async (req, res) => {
   try {
     let { order_id } = req.params;
     if (order_id.endsWith('.pdf')) order_id = order_id.replace(/\.pdf$/, '');
     if (!/^[a-zA-Z0-9-_]+$/.test(order_id)) return res.status(400).json({ message: 'Invalid order_id format' });
 
-    let bookingQuery = await pool.query(
-      'SELECT products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id FROM public.bookings WHERE order_id = $1',
+    console.log(`Fetching invoice with ID: ${order_id}`);
+
+    const bookingQuery = await pool.query(
+      'SELECT products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.bookings WHERE order_id = $1',
       [order_id]
     );
 
     if (bookingQuery.rows.length === 0) {
-      const parts = order_id.split('-');
-      if (parts.length > 1) {
-        const possibleOrderId = parts.slice(1).join('-');
-        bookingQuery = await pool.query(
-          'SELECT products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id FROM public.bookings WHERE order_id = $1',
-          [possibleOrderId]
-        );
-      }
+      console.error(`Booking not found for ID: ${order_id}`);
+      return res.status(404).json({ message: 'Booking not found' });
     }
 
-    if (bookingQuery.rows.length === 0) return res.status(404).json({ message: 'Invoice not found' });
-
-    const { products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id } = bookingQuery.rows[0];
+    const { products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status } = bookingQuery.rows[0];
     let agent_name = null;
     if (customer_type === 'Customer of Selected Agent' && customer_id) {
       const customerCheck = await pool.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
@@ -990,6 +1246,7 @@ exports.getInvoice = async (req, res) => {
 
     let pdfPath = pdf;
     if (!fs.existsSync(pdf)) {
+      console.log(`PDF not found at ${pdf}, regenerating for order ${order_id}`);
       const parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
       const pdfResult = await generatePDF(
         'invoice',
@@ -1020,22 +1277,24 @@ exports.getInvoice = async (req, res) => {
           total: parseFloat(total || 0)
         },
         { customer_name, address, mobile_number, email, district, state },
+        pdfPath,
         parsedProducts,
         'invoice'
       );
     }
 
     if (!fs.existsSync(pdfPath)) {
+      console.error(`PDF file not found after generation: ${pdfPath}`);
       return res.status(500).json({ message: 'PDF file not found after generation', error: 'File system error' });
     }
 
     const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
+    console.log(`Serving PDF: ${pdfPath}`);
     fs.createReadStream(pdfPath).pipe(res);
   } catch (err) {
+    console.error(`Failed to fetch invoice ${req.params.order_id}:`, err.message);
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });
   }
 };
-
-module.exports;
