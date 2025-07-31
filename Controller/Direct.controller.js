@@ -35,7 +35,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('Sivakasi', 50, 95)
         .text('Mobile: +91 63836 59214', 50, 110)
         .text('Email: nivasramasamy27@gmail.com', 50, 125)
-        .text('Website: www.funwithcrackers.com', 50, 140);
+        .text('Website: www.funwithcrackers.com', 50, 140); // Added website link
 
       // Customer Details
       const customerType = data.customer_type === 'Customer of Selected Agent' ? 'Customer - Agent' : data.customer_type || 'User';
@@ -247,17 +247,12 @@ async function sendTemplateWithPDF(mediaId, total, customerDetails, type) {
   }
 }
 
-async function sendBookingEmail(toEmail, bookingData, customerDetails, status) {
+async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, products, type, status = 'booked', transportDetails = null) {
   try {
-    console.log(`Attempting to send email to ${toEmail} for order ${bookingData.order_id}, status: ${status}`);
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(toEmail)) {
-      console.error(`Invalid email address: ${toEmail}`);
-      throw new Error(`Invalid email address: ${toEmail}`);
+    if (!fs.existsSync(pdfPath)) {
+      console.error(`PDF file does not exist for email: ${pdfPath}`);
+      throw new Error('PDF file does not exist for email');
     }
-
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
@@ -266,17 +261,19 @@ async function sendBookingEmail(toEmail, bookingData, customerDetails, status) {
       }
     });
 
+    const productList = products.map(p =>
+      `- ${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}`
+    ).join('\n');
+
     let subject, text, html;
-    const idField = 'Order ID';
-    const idValue = bookingData.order_id;
+    const idField = type === 'quotation' ? 'Quotation ID' : 'Order ID';
+    const idValue = bookingData.quotation_id || bookingData.order_id;
 
-    if (toEmail === 'nivasramasamy27@gmail.com') {
-      // Admin notification for status update
-      subject = `Order ${idValue} Status Updated to ${status}`;
+    if (toEmail === 'nivasramasamy27@gmail.com' && type === 'invoice' && status === 'booked') {
+      // New booking notification for admin
+      subject = `New Booking Notification: Order ${idValue}`;
       text = `
-Status Update Notification for Order ${idValue}
-
-The order status has been updated to "${status}".
+A new booking has been made with Phoenix Crackers.
 
 Booking Details:
 ${idField}: ${idValue}
@@ -287,13 +284,20 @@ Address: ${customerDetails.address || 'N/A'}
 District: ${customerDetails.district || 'N/A'}
 State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Products:
+${productList}
+
+Attached is the estimate bill for reference.
 
 Best regards,
 Phoenix Crackers Team
       `;
       html = `
-<p><strong>Status Update Notification for Order ${idValue}</strong></p>
-<p>The order status has been updated to "${status}".</p>
+<p>A new booking has been made with Phoenix Crackers.</p>
 <p><strong>Booking Details:</strong></p>
 <ul>
   <li><strong>${idField}:</strong> ${idValue}</li>
@@ -304,11 +308,205 @@ Phoenix Crackers Team
   <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
   <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
   <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
+  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
+  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
+  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
 </ul>
+<p><strong>Products:</strong></p>
+<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
+<p>Attached is the estimate bill for reference.</p>
 <p>Best regards,<br>Phoenix Crackers Team</p>
       `;
-    } else {
-      // Customer notification for status update
+    } else if (toEmail === 'nivasramasamy27@gmail.com' && type === 'invoice' && status === 'paid') {
+      // New payment notification for admin
+      subject = `New Payment Notification: Order ${idValue}`;
+      text = `
+A payment has been received for Order ${idValue}.
+
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Order ID: ${idValue}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Attached is the estimate bill for reference.
+
+Best regards,
+Phoenix Crackers Team
+      `;
+      html = `
+<p>A payment has been received for Order ${idValue}.</p>
+<p><strong>Details:</strong></p>
+<ul>
+  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
+  <li><strong>Order ID:</strong> ${idValue}</li>
+  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
+</ul>
+<p>Attached is the estimate bill for reference.</p>
+<p>Best regards,<br>Phoenix Crackers Team</p>
+      `;
+    } else if (type === 'invoice' && status === 'booked') {
+      subject = `Thank You for Your Booking! Order ${idValue}`;
+      text = `
+Dear ${customerDetails.customer_name || 'Customer'},
+
+Thank you for your booking with Phoenix Crackers!
+
+Booking Details:
+${idField}: ${idValue}
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
+Customer Type: ${bookingData.customer_type || 'User'}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Please make the payment to the following UPI ID: 2417805A@sib
+After making the payment, kindly send the transaction screenshot along with your username to our WhatsApp number: +91 63836 59214.
+
+Attached is your estimate bill for reference.
+
+For any queries, contact us at +91 63836 59214.
+
+Best regards,
+Phoenix Crackers Team
+      `;
+      html = `
+<p>Dear ${customerDetails.customer_name || 'Customer'},</p>
+<p>Thank you for your booking with Phoenix Crackers!</p>
+<p><strong>Booking Details:</strong></p>
+<ul>
+  <li><strong>${idField}:</strong> ${idValue}</li>
+  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
+  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
+  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
+  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
+  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
+  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
+  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
+  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
+</ul>
+<p>Please make the payment to the following UPI ID: <a href="upi://pay?pa=2417805A@sib&pn=Phoenix Crackers&cu=INR">2417805A@sib</a></p>
+<p>After making the payment, kindly send the transaction screenshot along with your username to our WhatsApp number: <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
+<p>Attached is your estimate bill for reference.</p>
+<p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
+<p>Best regards,<br>Phoenix Crackers Team</p>
+      `;
+    } else if (type === 'invoice' && status === 'paid') {
+      subject = `Payment Received for Order ${idValue}`;
+      text = `
+Dear ${customerDetails.customer_name || 'Customer'},
+
+Thank you for your payment for Order ${idValue}!
+
+We have received your payment, and we will start packing your order soon.
+
+Booking Details:
+${idField}: ${idValue}
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
+Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Products:
+${productList}
+
+Attached is your estimate bill for reference.
+
+For any queries, contact us at +91 63836 59214.
+
+Best regards,
+Phoenix Crackers Team
+      `;
+      html = `
+<p>Dear ${customerDetails.customer_name || 'Customer'},</p>
+<p>Thank you for your payment for Order ${idValue}!</p>
+<p>We have received your payment, and we will start packing your order soon.</p>
+<p><strong>Booking Details:</strong></p>
+<ul>
+  <li><strong>${idField}:</strong> ${idValue}</li>
+  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
+  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
+  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
+  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
+  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
+  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
+  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
+  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
+  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
+  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
+</ul>
+<p><strong>Products:</strong></p>
+<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
+<p>Attached is your estimate bill for reference.</p>
+<p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
+<p>Best regards,<br>Phoenix Crackers Team</p>
+      `;
+    } else if (type === 'invoice' && status === 'dispatched' && transportDetails) {
+      subject = `Order ${idValue} Dispatched`;
+      text = `
+Dear ${customerDetails.customer_name || 'Customer'},
+
+Your order ${idValue} has been dispatched!
+
+Transport Details:
+${Object.entries(transportDetails).map(([key, value]) => `${key}: ${value}`).join('\n')}
+
+Booking Details:
+${idField}: ${idValue}
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
+Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Products:
+${productList}
+
+Attached is your estimate bill for reference.
+
+For any queries, contact us at +91 63836 59214.
+
+Best regards,
+Phoenix Crackers Team
+      `;
+      html = `
+<p>Dear ${customerDetails.customer_name || 'Customer'},</p>
+<p>Your order ${idValue} has been dispatched!</p>
+<p><strong>Transport Details:</strong></p>
+<ul>${Object.entries(transportDetails).map(([key, value]) => `<li>${key}: ${value}</li>`).join('')}</ul>
+<p><strong>Booking Details:</strong></p>
+<ul>
+  <li><strong>${idField}:</strong> ${idValue}</li>
+  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
+  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
+  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
+  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
+  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
+  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
+  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
+  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
+  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
+  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
+</ul>
+<p><strong>Products:</strong></p>
+<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
+<p>Attached is your estimate bill for reference.</p>
+<p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
+<p>Best regards,<br>Phoenix Crackers Team</p>
+      `;
+    } else if (type === 'invoice') {
       subject = `Order ${idValue} Status Updated to ${status}`;
       text = `
 Dear ${customerDetails.customer_name || 'Customer'},
@@ -324,6 +522,14 @@ Address: ${customerDetails.address || 'N/A'}
 District: ${customerDetails.district || 'N/A'}
 State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Products:
+${productList}
+
+Attached is your estimate bill for reference.
 
 For any queries, contact us at +91 63836 59214.
 
@@ -343,9 +549,54 @@ Phoenix Crackers Team
   <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
   <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
   <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
+  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
+  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
+  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
 </ul>
+<p><strong>Products:</strong></p>
+<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
+<p>Attached is your estimate bill for reference.</p>
 <p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
 <p>Best regards,<br>Phoenix Crackers Team</p>
+      `;
+    } else {
+      subject = `New ${type === 'quotation' ? 'Quotation' : 'Booking'}: ${idValue}`;
+      text = `
+A new ${type} has been made.
+
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
+${idField}: ${idValue}
+Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Products:
+${productList}
+      `;
+      html = `
+<p>A new ${type} has been made.</p>
+<p><strong>Customer Details:</strong></p>
+<ul>
+  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
+  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
+  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
+  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
+  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
+  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
+  <li><strong>${idField}:</strong> ${idValue}</li>
+  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
+  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
+  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
+  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
+</ul>
+<p><strong>Products:</strong></p>
+<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
       `;
     }
 
@@ -354,13 +605,20 @@ Phoenix Crackers Team
       to: toEmail,
       subject,
       text,
-      html
+      html,
+      attachments: [
+        {
+          filename: path.basename(pdfPath),
+          path: pdfPath,
+          contentType: 'application/pdf',
+        }
+      ]
     };
 
     await transporter.sendMail(mailOptions);
-    console.log(`Email sent successfully to ${toEmail} for order ${idValue}, status: ${status}`);
+    console.log(`Email sent successfully to ${toEmail}`);
   } catch (err) {
-    console.error(`Failed to send email to ${toEmail} for order ${bookingData.order_id}:`, err.message);
+    console.error('Failed to send email:', err.message);
     throw err;
   }
 }
@@ -1018,53 +1276,25 @@ exports.updateBooking = async (req, res) => {
     const { order_id } = req.params;
     const { products, net_rate, you_save, total, promo_discount, status, transport_details } = req.body;
 
-    console.log(`Updating booking for order_id: ${order_id}, request body:`, req.body);
-
-    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) {
-      console.error(`Invalid or missing Order ID: ${order_id}`);
-      return res.status(400).json({ message: 'Invalid or missing Order ID' });
-    }
-
-    if (products && (!Array.isArray(products) || products.length === 0)) {
-      console.error(`Invalid products array for order_id: ${order_id}`);
-      return res.status(400).json({ message: 'Products array is required and must not be empty' });
-    }
-
-    if (total && (isNaN(parseFloat(total)) || parseFloat(total) <= 0)) {
-      console.error(`Invalid total for order_id: ${order_id}`);
-      return res.status(400).json({ message: 'Total must be a positive number' });
-    }
-
-    if (status && !['booked', 'paid', 'dispatched', 'canceled'].includes(status)) {
-      console.error(`Invalid status for order_id: ${order_id}: ${status}`);
-      return res.status(400).json({ message: 'Invalid status' });
-    }
-
-    // Make transport_details optional for dispatched status
-    let updatedTransportDetails = transport_details;
-    if (status === 'dispatched' && !transport_details) {
-      console.warn(`No transport details provided for dispatched status, using default for order_id: ${order_id}`);
-      updatedTransportDetails = { note: 'No transport details provided' };
-    }
+    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) return res.status(400).json({ message: 'Invalid or missing Order ID' });
+    if (products && (!Array.isArray(products) || products.length === 0)) return res.status(400).json({ message: 'Products array is required and must not be empty' });
+    if (total && (isNaN(parseFloat(total)) || parseFloat(total) <= 0)) return res.status(400).json({ message: 'Total must be a positive number' });
+    if (status && !['booked', 'paid', 'dispatched', 'canceled'].includes(status)) return res.status(400).json({ message: 'Invalid status' });
+    if (status === 'dispatched' && !transport_details) return res.status(400).json({ message: 'Transport details required for dispatched status' });
 
     const parsedNetRate = net_rate !== undefined ? parseFloat(net_rate) : undefined;
     const parsedYouSave = you_save !== undefined ? parseFloat(you_save) : undefined;
     const parsedPromoDiscount = promo_discount !== undefined ? parseFloat(promo_discount) : undefined;
     const parsedTotal = total !== undefined ? parseFloat(total) : undefined;
 
-    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedTotal].some(v => v !== undefined && isNaN(v))) {
-      console.error(`Invalid numbers in request for order_id: ${order_id}`);
+    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedTotal].some(v => v !== undefined && isNaN(v)))
       return res.status(400).json({ message: 'net_rate, you_save, total, and promo_discount must be valid numbers' });
-    }
 
     const bookingCheck = await pool.query(
       'SELECT * FROM public.bookings WHERE order_id = $1',
       [order_id]
     );
-    if (bookingCheck.rows.length === 0) {
-      console.error(`Booking not found for order_id: ${order_id}`);
-      return res.status(404).json({ message: 'Booking not found' });
-    }
+    if (bookingCheck.rows.length === 0) return res.status(404).json({ message: 'Booking not found' });
 
     const booking = bookingCheck.rows[0];
     let customerDetails = {
@@ -1073,37 +1303,58 @@ exports.updateBooking = async (req, res) => {
       mobile_number: booking.mobile_number,
       email: booking.email,
       district: booking.district,
-      state: booking.state,
-      customer_type: booking.customer_type
+      state: booking.state
     };
+    let agent_name = null;
 
-    // Fetch customer details from customers table if customer_id exists
     if (booking.customer_id) {
       const customerCheck = await pool.query(
-        'SELECT customer_name, address, mobile_number, email, district, state, customer_type FROM public.customers WHERE id = $1',
+        'SELECT customer_name, address, mobile_number, email, district, state, customer_type, agent_id FROM public.customers WHERE id = $1',
         [booking.customer_id]
       );
       if (customerCheck.rows.length > 0) {
         customerDetails = customerCheck.rows[0];
-      } else {
-        console.warn(`Customer not found for customer_id: ${booking.customer_id}, using booking table data`);
+        if (customerDetails.customer_type === 'Customer of Selected Agent' && customerDetails.agent_id) {
+          const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerDetails.agent_id]);
+          if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
+        }
       }
     }
 
     if (products) {
       for (const product of products) {
         const { id, product_type, quantity, price, discount } = product;
-        if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount))) {
-          console.error(`Invalid product entry for order_id: ${order_id}`);
+        if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
           return res.status(400).json({ message: 'Invalid product entry' });
-        }
 
         const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
         const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [id]);
-        if (productCheck.rows.length === 0) {
-          console.error(`Product ${id} of type ${product_type} not found for order_id: ${order_id}`);
+        if (productCheck.rows.length === 0)
           return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
+      }
+    }
+
+    let pdfPath = booking.pdf;
+    if (products && parsedTotal !== undefined) {
+      const pdfResult = await generatePDF(
+        'invoice',
+        { order_id, customer_type: booking.customer_type, total: parsedTotal, agent_name },
+        customerDetails,
+        products,
+        {
+          net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
+          you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
+          total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0),
+          promo_discount: parsedPromoDiscount !== undefined ? parsedPromoDiscount : parseFloat(booking.promo_discount || 0)
         }
+      );
+      pdfPath = pdfResult.pdfPath;
+
+      try {
+        const mediaId = await uploadPDF(pdfPath);
+        await sendTemplateWithPDF(mediaId, parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0), customerDetails, 'invoice');
+      } catch (err) {
+        console.error('WhatsApp PDF sending failed:', err);
       }
     }
 
@@ -1131,18 +1382,21 @@ exports.updateBooking = async (req, res) => {
       updateFields.push(`promo_discount = $${paramIndex++}`);
       updateValues.push(parsedPromoDiscount);
     }
+    if (pdfPath) {
+      updateFields.push(`pdf = $${paramIndex++}`);
+      updateValues.push(pdfPath);
+    }
     if (status) {
       updateFields.push(`status = $${paramIndex++}`);
       updateValues.push(status);
     }
-    if (updatedTransportDetails) {
+    if (transport_details) {
       updateFields.push(`transport_details = $${paramIndex++}`);
-      updateValues.push(JSON.stringify(updatedTransportDetails));
+      updateValues.push(JSON.stringify(transport_details));
     }
     updateFields.push(`updated_at = NOW()`);
 
     if (updateFields.length === 1) {
-      console.error(`No fields to update for order_id: ${order_id}`);
       return res.status(400).json({ message: 'No fields to update' });
     }
 
@@ -1154,56 +1408,46 @@ exports.updateBooking = async (req, res) => {
     `;
     updateValues.push(order_id);
 
-    console.log(`Executing query for order_id: ${order_id}:`, query, updateValues);
     const result = await pool.query(query, updateValues);
 
-    // Send emails if status is updated
-    if (status) {
-      const emailStatus = status;
-      console.log(`Status updated to ${emailStatus} for order_id: ${order_id}, attempting to send emails`);
-
-      // Send email to customer if email exists
-      if (customerDetails.email) {
-        console.log(`Sending customer email to ${customerDetails.email} for order_id: ${order_id}, status: ${emailStatus}`);
-        try {
-          await sendBookingEmail(
-            customerDetails.email,
-            {
-              order_id,
-              customer_type: booking.customer_type
-            },
-            customerDetails,
-            emailStatus
-          );
-          console.log(`Customer email sent successfully to ${customerDetails.email} for order_id: ${order_id}`);
-        } catch (err) {
-          console.error(`Failed to send customer email for order_id: ${order_id}:`, err.message);
-        }
-      } else {
-        console.warn(`No customer email found for order_id: ${order_id}, skipping customer email`);
-      }
-
-      // Send email to admin
-      console.log(`Sending admin email for order_id: ${order_id}, status: ${emailStatus}`);
-      try {
-        await sendBookingEmail(
-          'nivasramasamy27@gmail.com',
-          {
-            order_id,
-            customer_type: booking.customer_type
-          },
-          customerDetails,
-          emailStatus
-        );
-        console.log(`Admin email sent successfully to nivasramasamy27@gmail.com for order_id: ${order_id}`);
-      } catch (err) {
-        console.error(`Failed to send admin email for order_id: ${order_id}:`, err.message);
-      }
-    } else {
-      console.log(`No status update for order_id: ${order_id}, skipping email sending`);
+    // Send email to customer if email exists and status is updated
+    if (customerDetails.email && status) {
+      await sendBookingEmail(
+        customerDetails.email,
+        {
+          order_id,
+          customer_type: booking.customer_type,
+          net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
+          you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
+          total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0)
+        },
+        customerDetails,
+        pdfPath,
+        products || JSON.parse(booking.products),
+        'invoice',
+        status,
+        transport_details
+      );
     }
 
-    console.log(`Booking updated successfully for order_id: ${order_id}`);
+    // Send email to admin
+    await sendBookingEmail(
+      'nivasramasamy27@gmail.com',
+      {
+        order_id,
+        customer_type: booking.customer_type,
+        net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
+        you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
+        total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0)
+      },
+      customerDetails,
+      pdfPath,
+      products || JSON.parse(booking.products),
+      'invoice',
+      status,
+      transport_details
+    );
+
     res.status(200).json({
       message: 'Booking updated successfully',
       id: result.rows[0].id,
