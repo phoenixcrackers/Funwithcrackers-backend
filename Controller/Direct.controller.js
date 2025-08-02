@@ -288,34 +288,10 @@ Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
-Products:
-${productList}
-
 Attached is the estimate bill for reference.
 
 Best regards,
 Phoenix Crackers Team
-      `;
-      html = `
-<p>A new booking has been made with Phoenix Crackers.</p>
-<p><strong>Booking Details:</strong></p>
-<ul>
-  <li><strong>${idField}:</strong> ${idValue}</li>
-  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
-  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
-  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
-  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
-  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
-  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
-  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
-  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
-  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
-  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
-</ul>
-<p><strong>Products:</strong></p>
-<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
-<p>Attached is the estimate bill for reference.</p>
-<p>Best regards,<br>Phoenix Crackers Team</p>
       `;
     } else if (toEmail === 'nivasramasamy27@gmail.com' && type === 'invoice' && status === 'paid') {
       // New payment notification for admin
@@ -331,17 +307,6 @@ Attached is the estimate bill for reference.
 
 Best regards,
 Phoenix Crackers Team
-      `;
-      html = `
-<p>A payment has been received for Order ${idValue}.</p>
-<p><strong>Details:</strong></p>
-<ul>
-  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
-  <li><strong>Order ID:</strong> ${idValue}</li>
-  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
-</ul>
-<p>Attached is the estimate bill for reference.</p>
-<p>Best regards,<br>Phoenix Crackers Team</p>
       `;
     } else if (type === 'invoice' && status === 'booked') {
       subject = `Thank You for Your Booking! Order ${idValue}`;
@@ -370,27 +335,6 @@ For any queries, contact us at +91 63836 59214.
 
 Best regards,
 Phoenix Crackers Team
-      `;
-      html = `
-<p>Dear ${customerDetails.customer_name || 'Customer'},</p>
-<p>Thank you for your booking with Phoenix Crackers!</p>
-<p><strong>Booking Details:</strong></p>
-<ul>
-  <li><strong>${idField}:</strong> ${idValue}</li>
-  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
-  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
-  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
-  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
-  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
-  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
-  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
-  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
-</ul>
-<p>Please make the payment to the following UPI ID: <a href="upi://pay?pa=2417805A@sib&pn=Phoenix Crackers&cu=INR">2417805A@sib</a></p>
-<p>After making the payment, kindly send the transaction screenshot along with your username to our WhatsApp number: <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
-<p>Attached is your estimate bill for reference.</p>
-<p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
-<p>Best regards,<br>Phoenix Crackers Team</p>
       `;
     } else if (type === 'invoice' && status === 'paid') {
       subject = `Payment Received for Order ${idValue}`;
@@ -423,37 +367,6 @@ For any queries, contact us at +91 63836 59214.
 
 Best regards,
 Phoenix Crackers Team
-      `;
-      html = `
-<p>Dear ${customerDetails.customer_name || 'Customer'},</p>
-<p>Thank you for your payment for Order ${idValue}!</p>
-<p>We have received your payment, and we will start packing your order soon.</p>
-<p><strong>Booking Details:</strong></p>
-<ul>
-  <li><strong>${idField}:</strong> ${idValue}</li>
-  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
-  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
-  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
-  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
-  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
-  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
-  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
-  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
-  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
-  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
-</ul>
-<p><strong>Products:</strong></p>
-<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
-<p>Attached is your estimate bill for reference.</p>
-<p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
-<p>Best regards,<br>Phoenix Crackers Team</p>
-      `;
-    } else if (type === 'invoice' && status === 'dispatched' && transportDetails) {
-      subject = `Order ${idValue} Dispatched`;
-      text = `
-Dear ${customerDetails.customer_name || 'Customer'},
-
-Your order ${idValue} has been dispatched!
 
 Transport Details:
 ${Object.entries(transportDetails).map(([key, value]) => `${key}: ${value}`).join('\n')}
@@ -480,38 +393,7 @@ For any queries, contact us at +91 63836 59214.
 
 Best regards,
 Phoenix Crackers Team
-      `;
-      html = `
-<p>Dear ${customerDetails.customer_name || 'Customer'},</p>
-<p>Your order ${idValue} has been dispatched!</p>
-<p><strong>Transport Details:</strong></p>
-<ul>${Object.entries(transportDetails).map(([key, value]) => `<li>${key}: ${value}</li>`).join('')}</ul>
-<p><strong>Booking Details:</strong></p>
-<ul>
-  <li><strong>${idField}:</strong> ${idValue}</li>
-  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
-  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
-  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
-  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
-  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
-  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
-  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
-  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
-  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
-  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
-</ul>
-<p><strong>Products:</strong></p>
-<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
-<p>Attached is your estimate bill for reference.</p>
-<p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
-<p>Best regards,<br>Phoenix Crackers Team</p>
-      `;
-    } else if (type === 'invoice') {
-      subject = `Order ${idValue} Status Updated to ${status}`;
-      text = `
-Dear ${customerDetails.customer_name || 'Customer'},
 
-Your order ${idValue} status has been updated to "${status}".
 
 Booking Details:
 ${idField}: ${idValue}
@@ -535,30 +417,7 @@ For any queries, contact us at +91 63836 59214.
 
 Best regards,
 Phoenix Crackers Team
-      `;
-      html = `
-<p>Dear ${customerDetails.customer_name || 'Customer'},</p>
-<p>Your order ${idValue} status has been updated to "${status}".</p>
-<p><strong>Booking Details:</strong></p>
-<ul>
-  <li><strong>${idField}:</strong> ${idValue}</li>
-  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
-  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
-  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
-  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
-  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
-  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
-  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
-  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
-  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
-  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
-</ul>
-<p><strong>Products:</strong></p>
-<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
-<p>Attached is your estimate bill for reference.</p>
-<p>For any queries, contact us at <a href="https://wa.me/916383659214">+91 63836 59214</a>.</p>
-<p>Best regards,<br>Phoenix Crackers Team</p>
-      `;
+`;
     } else {
       subject = `New ${type === 'quotation' ? 'Quotation' : 'Booking'}: ${idValue}`;
       text = `
@@ -578,25 +437,6 @@ Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Products:
 ${productList}
-      `;
-      html = `
-<p>A new ${type} has been made.</p>
-<p><strong>Customer Details:</strong></p>
-<ul>
-  <li><strong>Customer Name:</strong> ${customerDetails.customer_name || 'N/A'}</li>
-  <li><strong>Mobile:</strong> ${customerDetails.mobile_number || 'N/A'}</li>
-  <li><strong>Email:</strong> ${customerDetails.email || 'N/A'}</li>
-  <li><strong>Address:</strong> ${customerDetails.address || 'N/A'}</li>
-  <li><strong>District:</strong> ${customerDetails.district || 'N/A'}</li>
-  <li><strong>State:</strong> ${customerDetails.state || 'N/A'}</li>
-  <li><strong>${idField}:</strong> ${idValue}</li>
-  <li><strong>Customer Type:</strong> ${bookingData.customer_type || 'User'}</li>
-  <li><strong>Net Rate:</strong> Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}</li>
-  <li><strong>You Save:</strong> Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}</li>
-  <li><strong>Total:</strong> Rs.${parseFloat(bookingData.total || 0).toFixed(2)}</li>
-</ul>
-<p><strong>Products:</strong></p>
-<ul>${products.map(p => `<li>${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}</li>`).join('')}</ul>
       `;
     }
 
