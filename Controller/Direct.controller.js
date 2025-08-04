@@ -1382,3 +1382,68 @@ exports.getInvoice = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });
   }
 };
+
+exports.searchBookings = async (req, res) => {
+  try {
+    const { customer_name, mobile_number } = req.body;
+
+    if (!customer_name || !mobile_number) {
+      return res.status(400).json({ message: 'Customer name and mobile number are required' });
+    }
+
+    const query = `
+      SELECT id, order_id, quotation_id, products, net_rate, you_save, total, 
+             promo_discount, customer_name, address, mobile_number, email, district, state, 
+             customer_type, status, created_at, pdf, transport_name, lr_number, transport_contact,
+             processing_date, dispatch_date, delivery_date
+      FROM public.bookings 
+      WHERE LOWER(customer_name) LIKE LOWER($1) 
+      AND mobile_number LIKE $2
+      ORDER BY created_at DESC
+    `;
+
+    const result = await pool.query(query, [`%${customer_name}%`, `%${mobile_number}%`]);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Failed to search bookings:', err.message);
+    res.status(500).json({ message: 'Failed to search bookings', error: err.message });
+  }
+};
+
+exports.searchQuotations = async (req, res) => {
+  try {
+    const { customer_name, mobile_number } = req.body;
+
+    if (!customer_name || !mobile_number) {
+      return res.status(400).json({ message: "Customer name and mobile number are required" });
+    }
+
+    const query = `
+      SELECT id, quotation_id, products, net_rate, you_save, total, 
+             promo_discount, customer_name, address, mobile_number, email, district, state, 
+             customer_type, status, created_at, pdf
+      FROM public.fwcquotations
+      WHERE LOWER(customer_name) LIKE LOWER($1) 
+      AND mobile_number LIKE $2
+      ORDER BY created_at DESC
+    `;
+
+    const result = await pool.query(query, [`%${customer_name}%`, `%${mobile_number}%`]);
+    
+    // Add empty transport details to maintain consistent response structure
+    const quotations = result.rows.map(row => ({
+      ...row,
+      type: 'quotation',
+      transport_name: null,
+      lr_number: null,
+      transport_contact: null,
+      dispatch_date: null,
+      delivery_date: null,
+    }));
+
+    res.status(200).json(quotations);
+  } catch (err) {
+    console.error("Failed to search quotations:", err.message);
+    res.status(500).json({ message: "Failed to search quotations", error: err.message });
+  }
+};

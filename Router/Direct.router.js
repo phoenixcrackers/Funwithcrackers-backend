@@ -12,5 +12,7 @@ router.put('/quotations/:quotation_id', directController.updateQuotation);
 router.put('/quotations/cancel/:quotation_id', directController.deleteQuotation);
 router.get('/quotation/:quotation_id', directController.getQuotation);
 router.get('/invoice/:order_id', directController.getInvoice);
+router.post("/bookings/search", directController.searchBookings);
+router.post("/quotations/search", directController.searchQuotations);
 
 module.exports = router;
