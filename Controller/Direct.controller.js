@@ -520,6 +520,38 @@ exports.getProductsByType = async (req, res) => {
   }
 };
 
+exports.getAproductsByType = async (req, res) => {
+  try {
+    const productTypesResult = await pool.query('SELECT DISTINCT product_type FROM public.products');
+    const productTypes = productTypesResult.rows.map(row => row.product_type);
+    let allProducts = [];
+    for (const productType of productTypes) {
+      const tableName = productType.toLowerCase().replace(/\s+/g, '_');
+      const query = `
+        SELECT id, serial_number, productname, price, per, discount, image, status, $1 AS product_type
+        FROM public.${tableName}
+      `;
+      const result = await pool.query(query, [productType]);
+      allProducts = allProducts.concat(result.rows);
+    }
+    const products = allProducts.map(row => ({
+      id: row.id,
+      product_type: row.product_type,
+      serial_number: row.serial_number,
+      productname: row.productname,
+      price: parseFloat(row.price || 0),
+      per: row.per,
+      discount: parseFloat(row.discount || 0),
+      image: row.image,
+      status: row.status
+    }));
+    res.status(200).json(products);
+  } catch (err) {
+    console.error('Failed to fetch products:', err.message);
+    res.status(500).json({ message: 'Failed to fetch products', error: err.message });
+  }
+};
+
 exports.getAllQuotations = async (req, res) => {
   try {
     const query = `
@@ -594,7 +626,7 @@ exports.createQuotation = async (req, res) => {
         return res.status(400).json({ message: 'Invalid product entry' });
 
       const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-      const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [id]);
+      const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1`, [id]);
       if (productCheck.rows.length === 0)
         return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
     }
@@ -723,7 +755,7 @@ exports.updateQuotation = async (req, res) => {
           return res.status(400).json({ message: 'Invalid product entry' });
 
         const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [id]);
+        const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1`, [id]);
         if (productCheck.rows.length === 0)
           return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
       }
@@ -951,7 +983,7 @@ exports.getQuotation = async (req, res) => {
 exports.createBooking = async (req, res) => {
   try {
     const {
-      customer_id, order_id, products, net_rate, you_save, total, promo_discount,
+      customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount,
       customer_type, customer_name, address, mobile_number, email, district, state
     } = req.body;
 
@@ -1012,7 +1044,7 @@ exports.createBooking = async (req, res) => {
         return res.status(400).json({ message: 'Invalid product entry' });
 
       const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-      const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [id]);
+      const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1`, [id]);
       if (productCheck.rows.length === 0)
         return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
     }
@@ -1027,14 +1059,16 @@ exports.createBooking = async (req, res) => {
 
     await pool.query('BEGIN');
 
-    const result = await pool.query(`
+    // Insert the booking
+    const bookingResult = await pool.query(`
       INSERT INTO public.bookings 
       (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
-      VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), $16)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), $17)
       RETURNING id, created_at, customer_type, pdf, order_id
     `, [
       customer_id || null,
       order_id,
+      quotation_id || null, // Include quotation_id if provided
       JSON.stringify(products),
       parsedNetRate,
       parsedYouSave,
@@ -1050,6 +1084,23 @@ exports.createBooking = async (req, res) => {
       'booked',
       pdfPath
     ]);
+
+    // Update the quotation status to "booked" if quotation_id is provided
+    if (quotation_id) {
+      const quotationCheck = await pool.query(
+        'SELECT id FROM public.fwcquotations WHERE quotation_id = $1 AND status = $2',
+        [quotation_id, 'pending']
+      );
+      if (quotationCheck.rows.length === 0) {
+        await pool.query('ROLLBACK');
+        return res.status(404).json({ message: 'Quotation not found or not in pending status' });
+      }
+
+      await pool.query(
+        'UPDATE public.fwcquotations SET status = $1, updated_at = NOW() WHERE quotation_id = $2',
+        ['booked', quotation_id]
+      );
+    }
 
     try {
       const mediaId = await uploadPDF(pdfPath);
@@ -1098,11 +1149,12 @@ exports.createBooking = async (req, res) => {
     console.log(`Booking created successfully for order_id: ${order_id}`);
     res.status(201).json({
       message: 'Booking created successfully',
-      id: result.rows[0].id,
-      created_at: result.rows[0].created_at,
-      customer_type: result.rows[0].customer_type,
-      pdf_path: result.rows[0].pdf,
-      order_id: result.rows[0].order_id
+      id: bookingResult.rows[0].id,
+      created_at: bookingResult.rows[0].created_at,
+      customer_type: bookingResult.rows[0].customer_type,
+      pdf_path: bookingResult.rows[0].pdf,
+      order_id: bookingResult.rows[0].order_id,
+      quotation_id // Return quotation_id for frontend use
     });
   } catch (err) {
     await pool.query('ROLLBACK');
@@ -1168,7 +1220,7 @@ exports.updateBooking = async (req, res) => {
           return res.status(400).json({ message: 'Invalid product entry' });
 
         const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1 AND status = 'on'`, [id]);
+        const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1`, [id]);
         if (productCheck.rows.length === 0)
           return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
       }
