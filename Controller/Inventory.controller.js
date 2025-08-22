@@ -46,7 +46,7 @@ exports.addProduct = async (req, res) => {
     const existingImages = req.body.existingImages ? JSON.parse(req.body.existingImages) : [];
     const files = req.files || [];
 
-    if (!serial_number || !productname || !price || !dprice || !per || !discount || !product_type) {
+    if (!serial_number || !productname) {
       return res.status(400).json({ message: "All required fields must be provided" });
     }
 
@@ -84,13 +84,13 @@ exports.addProduct = async (req, res) => {
           id SERIAL PRIMARY KEY,
           serial_number VARCHAR(50) NOT NULL,
           productname VARCHAR(100) NOT NULL,
-          price NUMERIC(10,2) NOT NULL,
-          dprice NUMERIC(10,2) NOT NULL,
-          per VARCHAR(10) NOT NULL CHECK (per IN ('pieces', 'box', 'pkt')),
-          discount NUMERIC(5,2) NOT NULL,
+          price NUMERIC(10,2),
+          dprice NUMERIC(10,2),
+          per VARCHAR(10) CHECK (per IN ('pieces', 'box', 'pkt')),
+          discount NUMERIC(5,2),
           image TEXT,
           description TEXT,
-          status VARCHAR(10) NOT NULL DEFAULT 'off' CHECK (status IN ('on', 'off')),
+          status VARCHAR(10) DEFAULT 'off' CHECK (status IN ('on', 'off')),
           fast_running BOOLEAN DEFAULT false
         )
       `);
@@ -154,7 +154,7 @@ exports.updateProduct = async (req, res) => {
     const { serial_number, productname, price, dprice, per, discount, status, description = "", existingImages } = req.body;
     const files = req.files || [];
 
-    if (!serial_number || !productname || !price || !dprice || !per || !discount) {
+    if (!serial_number || !productname) {
       return res.status(400).json({ message: "All required fields must be provided" });
     }
 
@@ -325,13 +325,13 @@ exports.addProductType = async (req, res) => {
         id SERIAL PRIMARY KEY,
         serial_number VARCHAR(50) NOT NULL,
         productname VARCHAR(100) NOT NULL,
-        price NUMERIC(10,2) NOT NULL,
-        dprice NUMERIC(10,2) NOT NULL,
-        per VARCHAR(10) NOT NULL CHECK (per IN ('pieces', 'box', 'pkt')),
-        discount NUMERIC(5,2) NOT NULL,
+        price NUMERIC(10,2),
+        dprice NUMERIC(10,2),
+        per VARCHAR(10) CHECK (per IN ('pieces', 'box', 'pkt')),
+        discount NUMERIC(5,2),
         image TEXT,
         description TEXT,
-        status VARCHAR(10) NOT NULL DEFAULT 'off' CHECK (status IN ('on', 'off')),
+        status VARCHAR(10) DEFAULT 'off' CHECK (status IN ('on', 'off')),
         fast_running BOOLEAN DEFAULT false
       )
     `);
