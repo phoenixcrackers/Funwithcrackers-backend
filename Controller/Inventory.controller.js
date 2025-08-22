@@ -42,11 +42,11 @@ async function getCachedProductTypes() {
 exports.addProduct = async (req, res) => {
   const client = await pool.connect();
   try {
-    const { serial_number, productname, price, per, discount, product_type, description = ""} = req.body;
+    const { serial_number, productname, price, dprice, per, discount, product_type, description = "" } = req.body;
     const existingImages = req.body.existingImages ? JSON.parse(req.body.existingImages) : [];
     const files = req.files || [];
 
-    if (!serial_number || !productname || !price || !per || !discount || !product_type) {
+    if (!serial_number || !productname || !price || !dprice || !per || !discount || !product_type) {
       return res.status(400).json({ message: "All required fields must be provided" });
     }
 
@@ -55,9 +55,14 @@ exports.addProduct = async (req, res) => {
     }
 
     const priceNum = Number.parseFloat(price);
+    const dpriceNum = Number.parseFloat(dprice);
     const discountNum = Number.parseFloat(discount);
+
     if (isNaN(priceNum) || priceNum < 0) {
       return res.status(400).json({ message: "Price must be a valid positive number" });
+    }
+    if (isNaN(dpriceNum) || dpriceNum < 0) {
+      return res.status(400).json({ message: "Direct customer price must be a valid positive number" });
     }
     if (isNaN(discountNum) || discountNum < 0 || discountNum > 100) {
       return res.status(400).json({ message: "Discount must be between 0 and 100%" });
@@ -80,12 +85,13 @@ exports.addProduct = async (req, res) => {
           serial_number VARCHAR(50) NOT NULL,
           productname VARCHAR(100) NOT NULL,
           price NUMERIC(10,2) NOT NULL,
+          dprice NUMERIC(10,2) NOT NULL,
           per VARCHAR(10) NOT NULL CHECK (per IN ('pieces', 'box', 'pkt')),
           discount NUMERIC(5,2) NOT NULL,
           image TEXT,
           description TEXT,
           status VARCHAR(10) NOT NULL DEFAULT 'off' CHECK (status IN ('on', 'off')),
-          fast_running BOOLEAN DEFAULT false,
+          fast_running BOOLEAN DEFAULT false
         )
       `);
       await client.query(
@@ -113,8 +119,8 @@ exports.addProduct = async (req, res) => {
 
     const insertQuery = `
       INSERT INTO public.${tableName}
-      (serial_number, productname, price, per, discount, image, status, description)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      (serial_number, productname, price, dprice, per, discount, image, status, description)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING id
     `;
 
@@ -122,6 +128,7 @@ exports.addProduct = async (req, res) => {
       serial_number,
       productname,
       priceNum,
+      dpriceNum,
       per,
       discountNum,
       finalImages.length > 0 ? JSON.stringify(finalImages) : null,
@@ -139,14 +146,15 @@ exports.addProduct = async (req, res) => {
   }
 };
 
+
 exports.updateProduct = async (req, res) => {
   const client = await pool.connect();
   try {
     const { tableName, id } = req.params;
-    const { serial_number, productname, price, per, discount, status, description = "", existingImages } = req.body;
+    const { serial_number, productname, price, dprice, per, discount, status, description = "", existingImages } = req.body;
     const files = req.files || [];
 
-    if (!serial_number || !productname || !price || !per || !discount) {
+    if (!serial_number || !productname || !price || !dprice || !per || !discount) {
       return res.status(400).json({ message: "All required fields must be provided" });
     }
 
@@ -155,9 +163,14 @@ exports.updateProduct = async (req, res) => {
     }
 
     const priceNum = Number.parseFloat(price);
+    const dpriceNum = Number.parseFloat(dprice);
     const discountNum = Number.parseFloat(discount);
+
     if (isNaN(priceNum) || priceNum < 0) {
       return res.status(400).json({ message: "Price must be a valid positive number" });
+    }
+    if (isNaN(dpriceNum) || dpriceNum < 0) {
+      return res.status(400).json({ message: "Direct customer price must be a valid positive number" });
     }
     if (isNaN(discountNum) || discountNum < 0 || discountNum > 100) {
       return res.status(400).json({ message: "Discount must be between 0 and 100%" });
@@ -195,12 +208,12 @@ exports.updateProduct = async (req, res) => {
 
     let query = `
       UPDATE public.${tableName}
-      SET serial_number = $1, productname = $2, price = $3, per = $4, discount = $5
+      SET serial_number = $1, productname = $2, price = $3, dprice = $4, per = $5, discount = $6
     `;
 
-    const values = [serial_number, productname, priceNum, per, discountNum];
+    const values = [serial_number, productname, priceNum, dpriceNum, per, discountNum];
 
-    let paramIndex = 6;
+    let paramIndex = 7;
 
     query += `, image = $${paramIndex}`;
     values.push(finalImages.length > 0 ? JSON.stringify(finalImages) : null);
@@ -234,6 +247,7 @@ exports.updateProduct = async (req, res) => {
   }
 };
 
+
 exports.getProducts = async (req, res) => {
   try {
     const { page = 1, limit = 50 } = req.query;
@@ -246,7 +260,7 @@ exports.getProducts = async (req, res) => {
       try {
         const result = await client.query(
           `
-          SELECT id, serial_number, productname, price, per, discount, status, fast_running, description, image
+          SELECT id, serial_number, productname, price, dprice, per, discount, status, fast_running, description, image
           FROM public.${tableName}
           ORDER BY id
           LIMIT $1 OFFSET $2
@@ -260,6 +274,7 @@ exports.getProducts = async (req, res) => {
           serial_number: row.serial_number,
           productname: row.productname,
           price: row.price,
+          dprice: row.dprice,
           per: row.per,
           discount: row.discount,
           image: row.image,
@@ -284,6 +299,7 @@ exports.getProducts = async (req, res) => {
     res.status(500).json({ message: "Failed to fetch products", error: err.message });
   }
 };
+
 
 exports.addProductType = async (req, res) => {
   try {
@@ -310,12 +326,13 @@ exports.addProductType = async (req, res) => {
         serial_number VARCHAR(50) NOT NULL,
         productname VARCHAR(100) NOT NULL,
         price NUMERIC(10,2) NOT NULL,
+        dprice NUMERIC(10,2) NOT NULL,
         per VARCHAR(10) NOT NULL CHECK (per IN ('pieces', 'box', 'pkt')),
         discount NUMERIC(5,2) NOT NULL,
         image TEXT,
         description TEXT,
         status VARCHAR(10) NOT NULL DEFAULT 'off' CHECK (status IN ('on', 'off')),
-        fast_running BOOLEAN DEFAULT false,
+        fast_running BOOLEAN DEFAULT false
       )
     `);
 
@@ -328,6 +345,7 @@ exports.addProductType = async (req, res) => {
     res.status(500).json({ message: "Failed to create product type", error: err.message });
   }
 };
+
 
 exports.getProductTypes = async (req, res) => {
   try {
