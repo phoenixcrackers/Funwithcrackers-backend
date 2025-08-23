@@ -250,7 +250,7 @@ exports.updateProduct = async (req, res) => {
 
 exports.getProducts = async (req, res) => {
   try {
-    const { page = 1, limit = 50 } = req.query;
+    const { page = 1, limit = 100 } = req.query;
     const offset = (page - 1) * limit;
     const productTypes = await getCachedProductTypes();
 
