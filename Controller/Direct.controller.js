@@ -204,7 +204,31 @@ async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, 
     const idField = type === 'quotation' ? 'Quotation ID' : 'Order ID';
     const idValue = bookingData.quotation_id || bookingData.order_id;
 
-    if (toEmail === 'nivasramasamy27@gmail.com' && type === 'invoice' && status === 'booked') {
+    if (toEmail === 'nivasramasamy27@gmail.com' && type === 'quotation') {
+      subject = `New Quotation Notification: ${idValue}`;
+      text = `
+A new quotation has been made with Phoenix Crackers.
+
+Quotation Details:
+${idField}: ${idValue}
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
+Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Additional Discount: ${parseFloat(bookingData.additional_discount || 0).toFixed(2)}%
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Attached is the quotation for reference.
+
+Best regards,
+Phoenix Crackers Team
+      `;
+    } else if (toEmail === 'nivasramasamy27@gmail.com' && type === 'invoice' && status === 'booked') {
       subject = `New Booking Notification: Order ${idValue}`;
       text = `
 A new booking has been made with Phoenix Crackers.
@@ -347,6 +371,7 @@ ${productList}
 
     await transporter.sendMail(mailOptions);
   } catch (err) {
+    console.error(`Failed to send email to ${toEmail}: ${err.message}`);
     throw err;
   }
 }
@@ -561,21 +586,25 @@ exports.createQuotation = async (req, res) => {
       pdfPath
     ]);
 
-    await sendBookingEmail(
-      'nivasramasamy27@gmail.com',
-      {
-        quotation_id,
-        customer_type: finalCustomerType,
-        net_rate: parsedNetRate,
-        you_save: parsedYouSave,
-        total: parsedTotal,
-        additional_discount: parsedAdditionalDiscount
-      },
-      customerDetails,
-      pdfPath,
-      enhancedProducts,
-      'quotation'
-    );
+    try {
+      await sendBookingEmail(
+        'nivasramasamy27@gmail.com',
+        {
+          quotation_id,
+          customer_type: finalCustomerType,
+          net_rate: parsedNetRate,
+          you_save: parsedYouSave,
+          total: parsedTotal,
+          additional_discount: parsedAdditionalDiscount
+        },
+        customerDetails,
+        pdfPath,
+        enhancedProducts,
+        'quotation'
+      );
+    } catch (emailError) {
+      console.error(`Failed to send quotation email to nivasramasamy27@gmail.com: ${emailError.message}`);
+    }
 
     res.status(201).json({
       message: 'Quotation created successfully',
@@ -658,7 +687,7 @@ exports.updateQuotation = async (req, res) => {
     }
 
     let pdfPath = quotation.pdf;
-    if (products && parsedTotal !== undefined) {
+    if (products || parsedTotal !== undefined) {
       const pdfResult = await generatePDF(
         'quotation',
         { quotation_id, customer_type: quotation.customer_type, total: parsedTotal, agent_name },
@@ -673,21 +702,25 @@ exports.updateQuotation = async (req, res) => {
         }
       );
       pdfPath = pdfResult.pdfPath;
-      await sendBookingEmail(
-        'nivasramasamy27@gmail.com',
-        {
-          quotation_id,
-          customer_type: quotation.customer_type,
-          net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
-          you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
-          total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0),
-          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(quotation.additional_discount || 0)
-        },
-        customerDetails,
-        pdfPath,
-        enhancedProducts,
-        'quotation'
-      );
+      try {
+        await sendBookingEmail(
+          'nivasramasamy27@gmail.com',
+          {
+            quotation_id,
+            customer_type: quotation.customer_type,
+            net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
+            you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
+            total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0),
+            additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(quotation.additional_discount || 0)
+          },
+          customerDetails,
+          pdfPath,
+          enhancedProducts,
+          'quotation'
+        );
+      } catch (emailError) {
+        console.error(`Failed to send quotation update email to nivasramasamy27@gmail.com: ${emailError.message}`);
+      }
     }
 
     const updateFields = [];
@@ -746,7 +779,8 @@ exports.updateQuotation = async (req, res) => {
       message: 'Quotation updated successfully',
       id: result.rows[0].id,
       quotation_id: result.rows[0].quotation_id,
-      status: result.rows[0].status
+      status: result.rows[0].status,
+      pdf_path: pdfPath
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update quotation', error: err.message });
@@ -984,25 +1018,9 @@ exports.createBooking = async (req, res) => {
       );
     }
 
-    await sendBookingEmail(
-      'nivasramasamy27@gmail.com',
-      {
-        order_id,
-        customer_type: finalCustomerType,
-        net_rate: parsedNetRate,
-        you_save: parsedYouSave,
-        total: parsedTotal,
-        additional_discount: parsedAdditionalDiscount
-      },
-      customerDetails,
-      pdfPath,
-      enhancedProducts,
-      'invoice'
-    );
-
-    if (customerDetails.email) {
+    try {
       await sendBookingEmail(
-        customerDetails.email,
+        'nivasramasamy27@gmail.com',
         {
           order_id,
           customer_type: finalCustomerType,
@@ -1014,9 +1032,33 @@ exports.createBooking = async (req, res) => {
         customerDetails,
         pdfPath,
         enhancedProducts,
-        'invoice',
-        'booked'
+        'invoice'
       );
+    } catch (emailError) {
+      console.error(`Failed to send booking email to nivasramasamy27@gmail.com: ${emailError.message}`);
+    }
+
+    if (customerDetails.email) {
+      try {
+        await sendBookingEmail(
+          customerDetails.email,
+          {
+            order_id,
+            customer_type: finalCustomerType,
+            net_rate: parsedNetRate,
+            you_save: parsedYouSave,
+            total: parsedTotal,
+            additional_discount: parsedAdditionalDiscount
+          },
+          customerDetails,
+          pdfPath,
+          enhancedProducts,
+          'invoice',
+          'booked'
+        );
+      } catch (emailError) {
+        console.error(`Failed to send booking email to ${customerDetails.email}: ${emailError.message}`);
+      }
     }
 
     await pool.query('COMMIT');
@@ -1105,7 +1147,7 @@ exports.updateBooking = async (req, res) => {
     }
 
     let pdfPath = booking.pdf;
-    if (products && parsedTotal !== undefined) {
+    if (products || parsedTotal !== undefined) {
       const pdfResult = await generatePDF(
         'invoice',
         { order_id, customer_type: booking.customer_type, total: parsedTotal, agent_name },
@@ -1179,8 +1221,32 @@ exports.updateBooking = async (req, res) => {
     const result = await pool.query(query, updateValues);
 
     if (customerDetails.email && status) {
+      try {
+        await sendBookingEmail(
+          customerDetails.email,
+          {
+            order_id,
+            customer_type: booking.customer_type,
+            net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
+            you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
+            total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0),
+            additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(booking.additional_discount || 0)
+          },
+          customerDetails,
+          pdfPath,
+          products || JSON.parse(booking.products),
+          'invoice',
+          status,
+          transport_details
+        );
+      } catch (emailError) {
+        console.error(`Failed to send booking update email to ${customerDetails.email}: ${emailError.message}`);
+      }
+    }
+
+    try {
       await sendBookingEmail(
-        customerDetails.email,
+        'nivasramasamy27@gmail.com',
         {
           order_id,
           customer_type: booking.customer_type,
@@ -1196,31 +1262,16 @@ exports.updateBooking = async (req, res) => {
         status,
         transport_details
       );
+    } catch (emailError) {
+      console.error(`Failed to send booking update email to nivasramasamy27@gmail.com: ${emailError.message}`);
     }
-
-    await sendBookingEmail(
-      'nivasramasamy27@gmail.com',
-      {
-        order_id,
-        customer_type: booking.customer_type,
-        net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
-        you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
-        total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0),
-        additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(booking.additional_discount || 0)
-      },
-      customerDetails,
-      pdfPath,
-      products || JSON.parse(booking.products),
-      'invoice',
-      status,
-      transport_details
-    );
 
     res.status(200).json({
       message: 'Booking updated successfully',
       id: result.rows[0].id,
       order_id: result.rows[0].order_id,
-      status: result.rows[0].status
+      status: result.rows[0].status,
+      pdf_path: pdfPath
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update booking', error: err.message });
