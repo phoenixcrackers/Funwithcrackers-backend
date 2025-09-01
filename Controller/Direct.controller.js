@@ -14,9 +14,6 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
 });
 
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-
 const generatePDF = (type, data, customerDetails, products, dbValues) => {
   return new Promise((resolve, reject) => {
     try {
@@ -63,19 +60,21 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       // Table Setup
       const tableY = 250;
       const tableWidth = 500;
-      const colWidths = [50, 150, 100, 100, 100];
-      const colX = [50, 100, 250, 350, 450];
+      const colWidths = [30, 150, 50, 70, 70, 50, 100];
+      const colX = [50, 80, 210, 250, 320, 400, 450];
       const rowHeight = 25;
       const pageHeight = doc.page.height - doc.page.margins.bottom;
 
       // Table Header
       doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
       doc.fontSize(10).font('Helvetica-Bold')
-        .text('Sl.No', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'center' })
+        .text('Sl.N', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'center' })
         .text('Product', colX[1] + 5, tableY, { width: colWidths[1] - 10, align: 'left' })
-        .text('Quantity', colX[2] + 5, tableY, { width: colWidths[2] - 10, align: 'center' })
-        .text('Price', colX[3] + 5, tableY, { width: colWidths[3] - 10, align: 'right' })
-        .text('Total', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'right' });
+        .text('Qty', colX[2] + 5, tableY, { width: colWidths[2] - 10, align: 'center' })
+        .text('Rate', colX[3] + 5, tableY, { width: colWidths[3] - 10, align: 'left' })
+        .text('Disc Rate', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'left' })
+        .text('Per', colX[5] + 5, tableY, { width: colWidths[5] - 10, align: 'center' })
+        .text('Total', colX[6] + 5, tableY, { width: colWidths[6] - 10, align: 'left' });
       doc.moveTo(50, tableY + 15).lineTo(50 + tableWidth, tableY + 15).stroke();
       colX.forEach((x, i) => {
         doc.moveTo(x, tableY - 5).lineTo(x, tableY + 15).stroke();
@@ -94,9 +93,11 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
           doc.fontSize(10).font('Helvetica-Bold')
             .text('Sl.No', colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
             .text('Product', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
-            .text('Quantity', colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
-            .text('Price', colX[3] + 5, y, { width: colWidths[3] - 10, align: 'right' })
-            .text('Total', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'right' });
+            .text('Qty', colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
+            .text('Rate', colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
+            .text('Disc Rate', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+            .text('Per', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
+            .text('Total', colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
           doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
           colX.forEach((x, i) => {
             doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
@@ -109,7 +110,8 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
         const price = parseFloat(product.price) || 0;
         const discount = parseFloat(product.discount || 0) || 0;
-        const productTotal = (price - (price * discount / 100)) * (product.quantity || 1);
+        const discRate = price - (price * discount / 100);
+        const productTotal = discRate * (product.quantity || 1);
 
         let productName = product.productname || 'N/A';
         if (productName.length > 30) {
@@ -120,8 +122,10 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
           .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
           .text(productName, colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
           .text(product.quantity || 1, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
-          .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'right' })
-          .text(`Rs.${productTotal.toFixed(2)}`, colX[4] + 5, y, { width: colWidths[4] - 10, align: 'right' });
+          .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
+          .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+          .text(product.per || 'N/A', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
+          .text(`Rs.${productTotal.toFixed(2)}`, colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
 
         doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
         colX.forEach((x, i) => {
@@ -143,18 +147,19 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const netRate = parseFloat(dbValues.net_rate) || 0;
       const youSave = parseFloat(dbValues.you_save) || 0;
       const additionalDiscount = parseFloat(dbValues.additional_discount) || 0;
-      const total = parseFloat(dbValues.total) || 0;
+      const total = netRate - youSave;
+      const additionalDiscountAmount = total * (additionalDiscount / 100);
+      const grandTotal = total - additionalDiscountAmount;
 
       doc.fontSize(10).font('Helvetica-Bold')
-        .text(`Net Rate: Rs.${netRate.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
-      y += 20;
-      doc.text(`You Save: Rs.${youSave.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
+        .text(`Total: Rs.${total.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
       y += 20;
       if (additionalDiscount > 0) {
-        doc.text(`Additional Discount: ${additionalDiscount.toFixed(2)}%`, 350, y, { width: 150, align: 'right' });
+        doc.text(`Discount: Rs.${additionalDiscountAmount.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
+        y += 20;
+        doc.text(`Grand Total: Rs.${grandTotal.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
         y += 20;
       }
-      doc.text(`Total: Rs.${total.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
 
       y += 30;
       if (y + 50 > pageHeight - 50) {
@@ -167,102 +172,20 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
       doc.end();
       stream.on('finish', () => {
-        console.log(`PDF generated successfully: ${pdfPath}`);
         resolve({ pdfPath, calculatedTotal: total });
       });
       stream.on('error', (err) => {
-        console.error(`PDF generation failed for ${pdfPath}:`, err.message);
         reject(err);
       });
     } catch (err) {
-      console.error(`Error in generatePDF for ${type} ${data.quotation_id || data.order_id}:`, err.message);
       reject(err);
     }
   });
 };
 
-async function uploadPDF(pdfPath) {
-  try {
-    if (!fs.existsSync(pdfPath)) {
-      console.error(`PDF file does not exist: ${pdfPath}`);
-      throw new Error('PDF file does not exist');
-    }
-    const form = new FormData();
-    form.append('file', fs.createReadStream(pdfPath));
-    form.append('type', 'application/pdf');
-    form.append('messaging_product', 'whatsapp');
-    const res = await axios.post(
-      `https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/media`,
-      form,
-      { headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, ...form.getHeaders() } }
-    );
-    console.log(`PDF uploaded successfully, media ID: ${res.data.id}`);
-    return res.data.id;
-  } catch (err) {
-    console.error('Failed to upload PDF:', err.message);
-    throw err;
-  }
-}
-
-async function sendTemplateWithPDF(mediaId, total, customerDetails, type) {
-  try {
-    let recipientNumber = customerDetails.mobile_number || '';
-    recipientNumber = recipientNumber.replace(/\D/g, '');
-    if (!recipientNumber.startsWith('+')) {
-      if (recipientNumber.length === 10) {
-        recipientNumber = `+91${recipientNumber}`;
-      } else if (recipientNumber.length === 12 && recipientNumber.startsWith('91')) {
-        recipientNumber = `+${recipientNumber}`;
-      } else {
-        throw new Error('Invalid mobile number format');
-      }
-    }
-
-    const recipients = [recipientNumber, '+919487524689'];
-    const templateName = type === 'quotation' ? 'quotation_pdf' : 'pdf_receipt';
-
-    for (const toNumber of recipients) {
-      const payload = {
-        messaging_product: 'whatsapp',
-        to: toNumber,
-        type: 'template',
-        template: {
-          name: templateName,
-          language: { code: 'en_US' },
-          components: [
-            {
-              type: 'header',
-              parameters: [{ type: 'document', document: { id: mediaId, filename: `${type}.pdf` } }],
-            },
-            {
-              type: 'body',
-              parameters: [
-                { type: 'text', text: `Rs.${parseFloat(total || 0).toFixed(2)}` },
-                { type: 'text', text: 'Madhu Nisha Crackers, Kil Tayilpatti, Sivakasi' },
-                { type: 'text', text: type },
-              ],
-            },
-          ],
-        },
-      };
-
-      await axios.post(
-        `https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`,
-        payload,
-        { headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, 'Content-Type': 'application/json' } }
-      );
-      console.log(`WhatsApp template ${templateName} sent successfully to ${toNumber}`);
-    }
-  } catch (err) {
-    console.error('Failed to send WhatsApp template:', err.message);
-    throw err;
-  }
-}
-
 async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, products, type, status = 'booked', transportDetails = null) {
   try {
     if (!fs.existsSync(pdfPath)) {
-      console.error(`PDF file does not exist for email: ${pdfPath}`);
       throw new Error('PDF file does not exist for email');
     }
     const transporter = nodemailer.createTransport({
@@ -297,7 +220,7 @@ State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
 Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
-Additional Discount: Rs.${parseFloat(bookingData.additional_discount || 0).toFixed(2)}
+Additional Discount: ${parseFloat(bookingData.additional_discount || 0).toFixed(2)}%
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Attached is the estimate bill for reference.
@@ -337,7 +260,7 @@ State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
 Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
-Additional Discount: Rs.${parseFloat(bookingData.additional_discount || 0).toFixed(2)}
+Additional Discount: ${parseFloat(bookingData.additional_discount || 0).toFixed(2)}%
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Products:
@@ -370,7 +293,7 @@ State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
 Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
-Additional Discount: Rs.${parseFloat(bookingData.additional_discount || 0).toFixed(2)}
+Additional Discount: ${parseFloat(bookingData.additional_discount || 0).toFixed(2)}%
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Products:
@@ -400,7 +323,7 @@ ${idField}: ${idValue}
 Customer Type: ${bookingData.customer_type || 'User'}
 Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
-Additional Discount: Rs.${parseFloat(bookingData.additional_discount || 0).toFixed(2)}
+Additional Discount: ${parseFloat(bookingData.additional_discount || 0).toFixed(2)}%
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Products:
@@ -423,9 +346,7 @@ ${productList}
     };
 
     await transporter.sendMail(mailOptions);
-    console.log(`Email sent successfully to ${toEmail}`);
   } catch (err) {
-    console.error('Failed to send email:', err.message);
     throw err;
   }
 }
@@ -439,7 +360,6 @@ exports.getCustomers = async (req, res) => {
     const result = await pool.query(query);
     res.status(200).json(result.rows);
   } catch (err) {
-    console.error('Failed to fetch customers:', err.message);
     res.status(500).json({ message: 'Failed to fetch customers', error: err.message });
   }
 };
@@ -449,7 +369,6 @@ exports.getProductTypes = async (req, res) => {
     const result = await pool.query('SELECT DISTINCT product_type FROM public.products');
     res.status(200).json(result.rows);
   } catch (err) {
-    console.error('Failed to fetch product types:', err.message);
     res.status(500).json({ message: 'Failed to fetch product types', error: err.message });
   }
 };
@@ -487,7 +406,6 @@ exports.getProductsByType = async (req, res) => {
 
     res.status(200).json(products);
   } catch (err) {
-    console.error('Failed to fetch products:', err.message);
     res.status(500).json({ message: 'Failed to fetch products', error: err.message });
   }
 };
@@ -524,7 +442,6 @@ exports.getAproductsByType = async (req, res) => {
 
     res.status(200).json(products);
   } catch (err) {
-    console.error('Failed to fetch products:', err.message);
     res.status(500).json({ message: 'Failed to fetch products', error: err.message });
   }
 };
@@ -541,7 +458,6 @@ exports.getAllQuotations = async (req, res) => {
     const result = await pool.query(query);
     res.status(200).json(result.rows);
   } catch (err) {
-    console.error('Failed to fetch quotations:', err.message);
     res.status(500).json({ message: 'Failed to fetch quotations', error: err.message });
   }
 };
@@ -598,22 +514,25 @@ exports.createQuotation = async (req, res) => {
         return res.status(400).json({ message: 'All customer details must be provided' });
     }
 
+    const enhancedProducts = [];
     for (const product of products) {
       const { id, product_type, quantity, price, discount } = product;
       if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
         return res.status(400).json({ message: 'Invalid product entry' });
 
       const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-      const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1`, [id]);
+      const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
       if (productCheck.rows.length === 0)
         return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
+      const per = productCheck.rows[0].per || '';
+      enhancedProducts.push({ ...product, per });
     }
 
     const { pdfPath } = await generatePDF(
       'quotation',
       { quotation_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
       customerDetails,
-      products,
+      enhancedProducts,
       { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
     );
 
@@ -625,7 +544,7 @@ exports.createQuotation = async (req, res) => {
     `, [
       customer_id || null,
       quotation_id,
-      JSON.stringify(products),
+      JSON.stringify(enhancedProducts),
       parsedNetRate,
       parsedYouSave,
       parsedTotal,
@@ -642,13 +561,6 @@ exports.createQuotation = async (req, res) => {
       pdfPath
     ]);
 
-    try {
-      const mediaId = await uploadPDF(pdfPath);
-      await sendTemplateWithPDF(mediaId, parsedTotal, customerDetails, 'quotation');
-    } catch (err) {
-      console.error('WhatsApp PDF sending failed:', err);
-    }
-
     await sendBookingEmail(
       'nivasramasamy27@gmail.com',
       {
@@ -661,7 +573,7 @@ exports.createQuotation = async (req, res) => {
       },
       customerDetails,
       pdfPath,
-      products,
+      enhancedProducts,
       'quotation'
     );
 
@@ -674,7 +586,6 @@ exports.createQuotation = async (req, res) => {
       quotation_id: result.rows[0].quotation_id
     });
   } catch (err) {
-    console.error(`Failed to create quotation ${req.body.quotation_id}:`, err.message);
     res.status(500).json({ message: 'Failed to create quotation', error: err.message });
   }
 };
@@ -729,16 +640,20 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
+    let enhancedProducts = quotation.products;
     if (products) {
+      enhancedProducts = [];
       for (const product of products) {
         const { id, product_type, quantity, price, discount } = product;
         if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
           return res.status(400).json({ message: 'Invalid product entry' });
 
         const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1`, [id]);
+        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
         if (productCheck.rows.length === 0)
           return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
+        const per = productCheck.rows[0].per || '';
+        enhancedProducts.push({ ...product, per });
       }
     }
 
@@ -748,7 +663,7 @@ exports.updateQuotation = async (req, res) => {
         'quotation',
         { quotation_id, customer_type: quotation.customer_type, total: parsedTotal, agent_name },
         customerDetails,
-        products,
+        enhancedProducts,
         {
           net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
           you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
@@ -758,14 +673,6 @@ exports.updateQuotation = async (req, res) => {
         }
       );
       pdfPath = pdfResult.pdfPath;
-
-      try {
-        const mediaId = await uploadPDF(pdfPath);
-        await sendTemplateWithPDF(mediaId, parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0), customerDetails, 'quotation');
-      } catch (err) {
-        console.error('WhatsApp PDF sending failed:', err);
-      }
-
       await sendBookingEmail(
         'nivasramasamy27@gmail.com',
         {
@@ -778,7 +685,7 @@ exports.updateQuotation = async (req, res) => {
         },
         customerDetails,
         pdfPath,
-        products,
+        enhancedProducts,
         'quotation'
       );
     }
@@ -789,7 +696,7 @@ exports.updateQuotation = async (req, res) => {
 
     if (products) {
       updateFields.push(`products = $${paramIndex++}`);
-      updateValues.push(JSON.stringify(products));
+      updateValues.push(JSON.stringify(enhancedProducts));
     }
     if (parsedNetRate !== undefined) {
       updateFields.push(`net_rate = $${paramIndex++}`);
@@ -842,7 +749,6 @@ exports.updateQuotation = async (req, res) => {
       status: result.rows[0].status
     });
   } catch (err) {
-    console.error(`Failed to update quotation ${req.params.quotation_id}:`, err.message);
     res.status(500).json({ message: 'Failed to update quotation', error: err.message });
   }
 };
@@ -865,7 +771,6 @@ exports.deleteQuotation = async (req, res) => {
 
     res.status(200).json({ message: 'Quotation canceled successfully', quotation_id });
   } catch (err) {
-    console.error(`Failed to cancel quotation ${req.params.quotation_id}:`, err.message);
     res.status(500).json({ message: 'Failed to cancel quotation', error: err.message });
   }
 };
@@ -876,15 +781,12 @@ exports.getQuotation = async (req, res) => {
     if (quotation_id.endsWith('.pdf')) quotation_id = quotation_id.replace(/\.pdf$/, '');
     if (!/^[a-zA-Z0-9-_]+$/.test(quotation_id)) return res.status(400).json({ message: 'Invalid quotation_id format' });
 
-    console.log(`Fetching quotation with ID: ${quotation_id}`);
-
     let quotationQuery = await pool.query(
       'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.fwcquotations WHERE quotation_id = $1',
       [quotation_id]
     );
 
     if (quotationQuery.rows.length === 0) {
-      console.log(`Quotation ${quotation_id} not found, trying alternative ID format`);
       const parts = quotation_id.split('-');
       if (parts.length > 1) {
         const possibleQuotationId = parts.slice(1).join('-');
@@ -896,13 +798,10 @@ exports.getQuotation = async (req, res) => {
     }
 
     if (quotationQuery.rows.length === 0) {
-      console.error(`Quotation not found for ID: ${quotation_id}`);
       return res.status(404).json({ message: 'Quotation not found' });
     }
 
     const { products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status } = quotationQuery.rows[0];
-    console.log(`Quotation found: ${quotation_id}, status: ${status}, pdf: ${pdf}`);
-
     let agent_name = null;
     if (customer_type === 'Customer of Selected Agent' && customer_id) {
       const customerCheck = await pool.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
@@ -914,13 +813,23 @@ exports.getQuotation = async (req, res) => {
 
     let pdfPath = pdf;
     if (!fs.existsSync(pdf)) {
-      console.log(`PDF not found at ${pdf}, regenerating for quotation ${quotation_id}`);
-      const parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+      let parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+      let enhancedProducts = [];
+      for (const p of parsedProducts) {
+        if (!p.per) {
+          const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
+          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+          const per = productCheck.rows[0]?.per || '';
+          enhancedProducts.push({ ...p, per });
+        } else {
+          enhancedProducts.push(p);
+        }
+      }
       const pdfResult = await generatePDF(
         'quotation',
         { quotation_id, customer_type, total: parseFloat(total || 0), agent_name },
         { customer_name, address, mobile_number, email, district, state },
-        parsedProducts,
+        enhancedProducts,
         { 
           net_rate: parseFloat(net_rate || 0), 
           you_save: parseFloat(you_save || 0), 
@@ -935,36 +844,17 @@ exports.getQuotation = async (req, res) => {
         'UPDATE public.fwcquotations SET pdf = $1 WHERE quotation_id = $2',
         [pdfPath, quotation_id]
       );
-
-      await sendBookingEmail(
-        'nivasramasamy27@gmail.com',
-        {
-          quotation_id,
-          customer_type,
-          net_rate: parseFloat(net_rate || 0),
-          you_save: parseFloat(you_save || 0),
-          total: parseFloat(total || 0),
-          additional_discount: parseFloat(additional_discount || 0)
-        },
-        { customer_name, address, mobile_number, email, district, state },
-        pdfPath,
-        parsedProducts,
-        'quotation'
-      );
     }
 
     if (!fs.existsSync(pdfPath)) {
-      console.error(`PDF file not found after generation: ${pdfPath}`);
       return res.status(500).json({ message: 'PDF file not found after generation', error: 'File system error' });
     }
 
     const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${quotation_id}-quotation.pdf`);
-    console.log(`Serving PDF: ${pdfPath}`);
     fs.createReadStream(pdfPath).pipe(res);
   } catch (err) {
-    console.error(`Failed to fetch quotation ${req.params.quotation_id}:`, err.message);
     res.status(500).json({ message: 'Failed to fetch quotation', error: err.message });
   }
 };
@@ -1028,28 +918,30 @@ exports.createBooking = async (req, res) => {
         return res.status(400).json({ message: 'All customer details must be provided' });
     }
 
+    const enhancedProducts = [];
     for (const product of products) {
       const { id, product_type, quantity, price, discount } = product;
       if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
         return res.status(400).json({ message: 'Invalid product entry' });
 
       const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-      const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1`, [id]);
+      const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
       if (productCheck.rows.length === 0)
         return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
+      const per = productCheck.rows[0].per || '';
+      enhancedProducts.push({ ...product, per });
     }
 
     const { pdfPath } = await generatePDF(
       'invoice',
       { order_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
       customerDetails,
-      products,
+      enhancedProducts,
       { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
     );
 
     await pool.query('BEGIN');
 
-    // Updated INSERT query: Removed created_at from the column list
     const bookingResult = await pool.query(`
       INSERT INTO public.bookings 
       (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, pdf)
@@ -1059,7 +951,7 @@ exports.createBooking = async (req, res) => {
       customer_id || null,
       order_id,
       quotation_id || null,
-      JSON.stringify(products),
+      JSON.stringify(enhancedProducts),
       parsedNetRate,
       parsedYouSave,
       parsedTotal,
@@ -1092,13 +984,6 @@ exports.createBooking = async (req, res) => {
       );
     }
 
-    try {
-      const mediaId = await uploadPDF(pdfPath);
-      await sendTemplateWithPDF(mediaId, parsedTotal, customerDetails, 'invoice');
-    } catch (err) {
-      console.error('WhatsApp PDF sending failed:', err);
-    }
-
     await sendBookingEmail(
       'nivasramasamy27@gmail.com',
       {
@@ -1111,7 +996,7 @@ exports.createBooking = async (req, res) => {
       },
       customerDetails,
       pdfPath,
-      products,
+      enhancedProducts,
       'invoice'
     );
 
@@ -1128,7 +1013,7 @@ exports.createBooking = async (req, res) => {
         },
         customerDetails,
         pdfPath,
-        products,
+        enhancedProducts,
         'invoice',
         'booked'
       );
@@ -1136,7 +1021,6 @@ exports.createBooking = async (req, res) => {
 
     await pool.query('COMMIT');
 
-    console.log(`Booking created successfully for order_id: ${order_id}`);
     res.status(201).json({
       message: 'Booking created successfully',
       id: bookingResult.rows[0].id,
@@ -1148,7 +1032,6 @@ exports.createBooking = async (req, res) => {
     });
   } catch (err) {
     await pool.query('ROLLBACK');
-    console.error(`Failed to create booking for order_id ${req.body.order_id}:`, err.message);
     res.status(500).json({ message: 'Failed to create booking', error: err.message });
   }
 };
@@ -1204,16 +1087,20 @@ exports.updateBooking = async (req, res) => {
       }
     }
 
+    let enhancedProducts = booking.products;
     if (products) {
+      enhancedProducts = [];
       for (const product of products) {
         const { id, product_type, quantity, price, discount } = product;
         if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
           return res.status(400).json({ message: 'Invalid product entry' });
 
         const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT id FROM public.${tableName} WHERE id = $1`, [id]);
+        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
         if (productCheck.rows.length === 0)
           return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
+        const per = productCheck.rows[0].per || '';
+        enhancedProducts.push({ ...product, per });
       }
     }
 
@@ -1223,7 +1110,7 @@ exports.updateBooking = async (req, res) => {
         'invoice',
         { order_id, customer_type: booking.customer_type, total: parsedTotal, agent_name },
         customerDetails,
-        products,
+        enhancedProducts,
         {
           net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
           you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
@@ -1233,13 +1120,6 @@ exports.updateBooking = async (req, res) => {
         }
       );
       pdfPath = pdfResult.pdfPath;
-
-      try {
-        const mediaId = await uploadPDF(pdfPath);
-        await sendTemplateWithPDF(mediaId, parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0), customerDetails, 'invoice');
-      } catch (err) {
-        console.error('WhatsApp PDF sending failed:', err);
-      }
     }
 
     const updateFields = [];
@@ -1248,7 +1128,7 @@ exports.updateBooking = async (req, res) => {
 
     if (products) {
       updateFields.push(`products = $${paramIndex++}`);
-      updateValues.push(JSON.stringify(products));
+      updateValues.push(JSON.stringify(enhancedProducts));
     }
     if (parsedNetRate !== undefined) {
       updateFields.push(`net_rate = $${paramIndex++}`);
@@ -1343,7 +1223,6 @@ exports.updateBooking = async (req, res) => {
       status: result.rows[0].status
     });
   } catch (err) {
-    console.error(`Failed to update booking ${req.params.order_id}:`, err.message);
     res.status(500).json({ message: 'Failed to update booking', error: err.message });
   }
 };
@@ -1354,15 +1233,12 @@ exports.getInvoice = async (req, res) => {
     if (order_id.endsWith('.pdf')) order_id = order_id.replace(/\.pdf$/, '');
     if (!/^[a-zA-Z0-9-_]+$/.test(order_id)) return res.status(400).json({ message: 'Invalid order_id format' });
 
-    console.log(`Fetching invoice with ID: ${order_id}`);
-
     const bookingQuery = await pool.query(
       'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.bookings WHERE order_id = $1',
       [order_id]
     );
 
     if (bookingQuery.rows.length === 0) {
-      console.error(`Booking not found for ID: ${order_id}`);
       return res.status(404).json({ message: 'Booking not found' });
     }
 
@@ -1378,13 +1254,23 @@ exports.getInvoice = async (req, res) => {
 
     let pdfPath = pdf;
     if (!fs.existsSync(pdf)) {
-      console.log(`PDF not found at ${pdf}, regenerating for order ${order_id}`);
-      const parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+      let parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+      let enhancedProducts = [];
+      for (const p of parsedProducts) {
+        if (!p.per) {
+          const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
+          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+          const per = productCheck.rows[0]?.per || '';
+          enhancedProducts.push({ ...p, per });
+        } else {
+          enhancedProducts.push(p);
+        }
+      }
       const pdfResult = await generatePDF(
         'invoice',
         { order_id, customer_type, total: parseFloat(total || 0), agent_name },
         { customer_name, address, mobile_number, email, district, state },
-        parsedProducts,
+        enhancedProducts,
         { 
           net_rate: parseFloat(net_rate || 0), 
           you_save: parseFloat(you_save || 0), 
@@ -1399,36 +1285,17 @@ exports.getInvoice = async (req, res) => {
         'UPDATE public.bookings SET pdf = $1 WHERE order_id = $2',
         [pdfPath, order_id]
       );
-
-      await sendBookingEmail(
-        'nivasramasamy27@gmail.com',
-        {
-          order_id,
-          customer_type,
-          net_rate: parseFloat(net_rate || 0),
-          you_save: parseFloat(you_save || 0),
-          total: parseFloat(total || 0),
-          additional_discount: parseFloat(additional_discount || 0)
-        },
-        { customer_name, address, mobile_number, email, district, state },
-        pdfPath,
-        parsedProducts,
-        'invoice'
-      );
     }
 
     if (!fs.existsSync(pdfPath)) {
-      console.error(`PDF file not found after generation: ${pdfPath}`);
       return res.status(500).json({ message: 'PDF file not found after generation', error: 'File system error' });
     }
 
     const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
-    console.log(`Serving PDF: ${pdfPath}`);
     fs.createReadStream(pdfPath).pipe(res);
   } catch (err) {
-    console.error(`Failed to fetch invoice ${req.params.order_id}:`, err.message);
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });
   }
 };
@@ -1455,7 +1322,6 @@ exports.searchBookings = async (req, res) => {
     const result = await pool.query(query, [`%${customer_name}%`, `%${mobile_number}%`]);
     res.status(200).json(result.rows);
   } catch (err) {
-    console.error('Failed to search bookings:', err.message);
     res.status(500).json({ message: 'Failed to search bookings', error: err.message });
   }
 };
@@ -1492,7 +1358,6 @@ exports.searchQuotations = async (req, res) => {
 
     res.status(200).json(quotations);
   } catch (err) {
-    console.error("Failed to search quotations:", err.message);
     res.status(500).json({ message: "Failed to search quotations", error: err.message });
   }
 };
