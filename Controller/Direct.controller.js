@@ -20,17 +20,15 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
     try {
       const doc = new PDFDocument({ margin: 50, size: 'A4' });
       const safeCustomerName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      const pdfDir = path.resolve(__dirname, '../pdf_data'); // Use absolute path
+      const pdfDir = path.resolve(__dirname, '../pdf_data');
       if (!fs.existsSync(pdfDir)) {
         fs.mkdirSync(pdfDir, { recursive: true });
-        // Set directory permissions for server compatibility (read/write for owner and group)
         fs.chmodSync(pdfDir, 0o770);
       }
       const pdfPath = path.join(pdfDir, `${safeCustomerName}-${data.order_id || data.quotation_id}-${type}.pdf`);
-      const stream = fs.createWriteStream(pdfPath, { flags: 'w', mode: 0o660 }); // Set file permissions
+      const stream = fs.createWriteStream(pdfPath, { flags: 'w', mode: 0o660 });
       doc.pipe(stream);
 
-      // Header
       doc.fontSize(20).font('Helvetica-Bold').text(type === 'quotation' ? 'Quotation' : 'Estimate Bill', 50, 50, { align: 'center' });
       doc.fontSize(12).font('Helvetica')
         .text('Phoenix Crackers', 50, 80)
@@ -39,7 +37,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('Email: nivasramasamy27@gmail.com', 50, 125)
         .text('Website: www.funwithcrackers.com', 50, 140);
 
-      // Customer Details
       const customerType = data.customer_type === 'Customer of Selected Agent' ? 'Customer - Agent' : data.customer_type || 'User';
       let addressLine1 = customerDetails.address || 'N/A';
       let addressLine2 = '';
@@ -62,7 +59,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         doc.text(`Agent: ${data.agent_name}`, 300, 215, { align: 'right' });
       }
 
-      // Table Setup
       const tableY = 250;
       const tableWidth = 500;
       const colWidths = [30, 150, 50, 70, 70, 50, 100];
@@ -70,7 +66,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const rowHeight = 25;
       const pageHeight = doc.page.height - doc.page.margins.bottom;
 
-      // Table Header
       doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
       doc.fontSize(10).font('Helvetica-Bold')
         .text('Sl.No', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'center' })
@@ -88,7 +83,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         }
       });
 
-      // Table Rows
       let y = tableY + rowHeight;
       products.forEach((product, index) => {
         if (y + rowHeight > pageHeight - 50) {
@@ -177,12 +171,10 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
       doc.end();
       stream.on('finish', () => {
-        // Verify file existence after creation
         if (!fs.existsSync(pdfPath)) {
           reject(new Error(`PDF file not created at ${pdfPath}`));
           return;
         }
-        // Verify file readability
         fs.access(pdfPath, fs.constants.R_OK, (err) => {
           if (err) {
             reject(new Error(`PDF file at ${pdfPath} is not readable: ${err.message}`));
@@ -205,13 +197,29 @@ async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, 
     if (!fs.existsSync(pdfPath)) {
       throw new Error('PDF file does not exist for email');
     }
+
+    const emailUser = process.env.EMAIL_USER || 'phoenixcrackersfwc@gmail.com';
+    const emailPass = process.env.EMAIL_PASS || 'eegm mdht oehj bbhg';
+    if (!emailUser || !emailPass) {
+      throw new Error('Email credentials not configured in environment variables');
+    }
+
     const transporter = nodemailer.createTransport({
-      service: 'gmail',
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
       auth: {
-        user: 'phoenixcrackersfwc@gmail.com',
-        pass: 'eegm mdht oehj bbhg'
-      }
+        user: emailUser,
+        pass: emailPass,
+      },
+      logger: true,
+      debug: true,
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 10000,
     });
+
+    await transporter.verify();
 
     const productList = products.map(p =>
       `- ${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}`
@@ -372,21 +380,41 @@ ${productList}
       `;
     }
 
-    const mailOptions = {
-      from: '"Phoenix Crackers" <nivasramasamy27@gmail.com>',
-      to: toEmail,
-      subject,
-      text,
-      attachments: [
-        {
-          filename: path.basename(pdfPath),
-          path: pdfPath,
-          contentType: 'application/pdf',
-        }
-      ]
-    };
+    let retries = 3;
+    let lastError = null;
+    while (retries > 0) {
+      try {
+        const mailOptions = {
+          from: `"Phoenix Crackers" <${emailUser}>`,
+          to: toEmail,
+          subject,
+          text,
+          attachments: [
+            {
+              filename: path.basename(pdfPath),
+              path: pdfPath,
+              contentType: 'application/pdf',
+            },
+          ],
+        };
 
-    await transporter.sendMail(mailOptions);
+        await transporter.sendMail(mailOptions);
+        console.log(`Email sent successfully to ${toEmail}`);
+        return;
+      } catch (err) {
+        lastError = err;
+        console.error(`Attempt ${4 - retries} failed for ${toEmail}: ${err.message}`);
+        retries--;
+        if (retries > 0) {
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      }
+    }
+
+    const errorLogPath = path.join(__dirname, '../logs/email_errors.log');
+    const errorMessage = `Failed to send email to ${toEmail} at ${new Date().toISOString()}: ${lastError.message}\n`;
+    fs.appendFileSync(errorLogPath, errorMessage);
+    throw new Error(`Failed to send email to ${toEmail} after 3 retries: ${lastError.message}`);
   } catch (err) {
     console.error(`Failed to send email to ${toEmail}: ${err.message}`);
     throw err;
@@ -623,7 +651,6 @@ exports.createQuotation = async (req, res) => {
       console.error(`Failed to send quotation email to nivasramasamy27@gmail.com: ${emailError.message}`);
     }
 
-    // Stream PDF for automatic download
     if (!fs.existsSync(pdfPath)) {
       return res.status(500).json({ message: 'PDF file not found after generation', error: 'File system error' });
     }
@@ -800,7 +827,6 @@ exports.updateQuotation = async (req, res) => {
 
     const result = await pool.query(query, updateValues);
 
-    // Stream PDF for automatic download
     if (!fs.existsSync(pdfPath)) {
       return res.status(500).json({ message: 'PDF file not found after update', error: 'File system error' });
     }
@@ -1061,6 +1087,9 @@ exports.createBooking = async (req, res) => {
       );
     }
 
+    await pool.query('COMMIT');
+
+    // Send emails after booking is committed, but don't fail the request if emails fail
     try {
       await sendBookingEmail(
         'nivasramasamy27@gmail.com',
@@ -1103,8 +1132,6 @@ exports.createBooking = async (req, res) => {
         console.error(`Failed to send booking email to ${customerDetails.email}: ${emailError.message}`);
       }
     }
-
-    await pool.query('COMMIT');
 
     // Stream PDF for automatic download
     if (!fs.existsSync(pdfPath)) {
@@ -1316,7 +1343,6 @@ exports.updateBooking = async (req, res) => {
       console.error(`Failed to send booking update email to nivasramasamy27@gmail.com: ${emailError.message}`);
     }
 
-    // Stream PDF for automatic download
     if (!fs.existsSync(pdfPath)) {
       return res.status(500).json({ message: 'PDF file not found after update', error: 'File system error' });
     }
