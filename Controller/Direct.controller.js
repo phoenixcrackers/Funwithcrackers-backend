@@ -35,7 +35,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('Sivakasi', 50, 95)
         .text('Mobile: +91 63836 59214', 50, 110)
         .text('Email: nivasramasamy27@gmail.com', 50, 125)
-        .text('Website: www.funwithcrackers.com', 50, 140); // Added website link
+        .text('Website: www.funwithcrackers.com', 50, 140);
 
       // Customer Details
       const customerType = data.customer_type === 'Customer of Selected Agent' ? 'Customer - Agent' : data.customer_type || 'User';
@@ -135,13 +135,14 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       });
 
       y += 10;
-      if (y + 90 > pageHeight - 50) {
+      if (y + 110 > pageHeight - 50) {
         doc.addPage();
         y = doc.page.margins.top + 20;
       }
 
       const netRate = parseFloat(dbValues.net_rate) || 0;
       const youSave = parseFloat(dbValues.you_save) || 0;
+      const additionalDiscount = parseFloat(dbValues.additional_discount) || 0;
       const total = parseFloat(dbValues.total) || 0;
 
       doc.fontSize(10).font('Helvetica-Bold')
@@ -149,6 +150,10 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       y += 20;
       doc.text(`You Save: Rs.${youSave.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
       y += 20;
+      if (additionalDiscount > 0) {
+        doc.text(`Additional Discount: ${additionalDiscount.toFixed(2)}%`, 350, y, { width: 150, align: 'right' });
+        y += 20;
+      }
       doc.text(`Total: Rs.${total.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
 
       y += 30;
@@ -213,13 +218,9 @@ async function sendTemplateWithPDF(mediaId, total, customerDetails, type) {
       }
     }
 
-    // Define recipients: always include default number and recipient
     const recipients = [recipientNumber, '+919487524689'];
-
-    // Determine template name based on type
     const templateName = type === 'quotation' ? 'quotation_pdf' : 'pdf_receipt';
 
-    // Send message to each recipient
     for (const toNumber of recipients) {
       const payload = {
         messaging_product: 'whatsapp',
@@ -276,12 +277,11 @@ async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, 
       `- ${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}`
     ).join('\n');
 
-    let subject, text, html;
+    let subject, text;
     const idField = type === 'quotation' ? 'Quotation ID' : 'Order ID';
     const idValue = bookingData.quotation_id || bookingData.order_id;
 
     if (toEmail === 'nivasramasamy27@gmail.com' && type === 'invoice' && status === 'booked') {
-      // New booking notification for admin
       subject = `New Booking Notification: Order ${idValue}`;
       text = `
 A new booking has been made with Phoenix Crackers.
@@ -297,6 +297,7 @@ State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
 Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Additional Discount: Rs.${parseFloat(bookingData.additional_discount || 0).toFixed(2)}
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Attached is the estimate bill for reference.
@@ -305,7 +306,6 @@ Best regards,
 Phoenix Crackers Team
       `;
     } else if (toEmail === 'nivasramasamy27@gmail.com' && type === 'invoice' && status === 'paid') {
-      // New payment notification for admin
       subject = `New Payment Notification: Order ${idValue}`;
       text = `
 A payment has been received for Order ${idValue}.
@@ -335,7 +335,13 @@ Address: ${customerDetails.address || 'N/A'}
 District: ${customerDetails.district || 'N/A'}
 State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Additional Discount: Rs.${parseFloat(bookingData.additional_discount || 0).toFixed(2)}
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Products:
+${productList}
 
 Attached is your estimate bill for reference.
 
@@ -364,6 +370,7 @@ State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
 Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Additional Discount: Rs.${parseFloat(bookingData.additional_discount || 0).toFixed(2)}
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Products:
@@ -376,56 +383,8 @@ For any queries, contact us at +91 63836 59214.
 Best regards,
 Phoenix Crackers Team
 
-Transport Details:
-${Object.entries(transportDetails).map(([key, value]) => `${key}: ${value}`).join('\n')}
-
-Booking Details:
-${idField}: ${idValue}
-Customer Name: ${customerDetails.customer_name || 'N/A'}
-Mobile: ${customerDetails.mobile_number || 'N/A'}
-Email: ${customerDetails.email || 'N/A'}
-Address: ${customerDetails.address || 'N/A'}
-District: ${customerDetails.district || 'N/A'}
-State: ${customerDetails.state || 'N/A'}
-Customer Type: ${bookingData.customer_type || 'User'}
-Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
-You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
-Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
-
-Products:
-${productList}
-
-Attached is your estimate bill for reference.
-
-For any queries, contact us at +91 63836 59214.
-
-Best regards,
-Phoenix Crackers Team
-
-
-Booking Details:
-${idField}: ${idValue}
-Customer Name: ${customerDetails.customer_name || 'N/A'}
-Mobile: ${customerDetails.mobile_number || 'N/A'}
-Email: ${customerDetails.email || 'N/A'}
-Address: ${customerDetails.address || 'N/A'}
-District: ${customerDetails.district || 'N/A'}
-State: ${customerDetails.state || 'N/A'}
-Customer Type: ${bookingData.customer_type || 'User'}
-Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
-You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
-Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
-
-Products:
-${productList}
-
-Attached is your estimate bill for reference.
-
-For any queries, contact us at +91 63836 59214.
-
-Best regards,
-Phoenix Crackers Team
-`;
+${transportDetails ? `Transport Details:\n${Object.entries(transportDetails).map(([key, value]) => `${key}: ${value}`).join('\n')}` : ''}
+      `;
     } else {
       subject = `New ${type === 'quotation' ? 'Quotation' : 'Booking'}: ${idValue}`;
       text = `
@@ -441,6 +400,7 @@ ${idField}: ${idValue}
 Customer Type: ${bookingData.customer_type || 'User'}
 Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Additional Discount: Rs.${parseFloat(bookingData.additional_discount || 0).toFixed(2)}
 Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Products:
@@ -453,7 +413,6 @@ ${productList}
       to: toEmail,
       subject,
       text,
-      html,
       attachments: [
         {
           filename: path.basename(pdfPath),
@@ -519,7 +478,7 @@ exports.getProductsByType = async (req, res) => {
       serial_number: row.serial_number,
       productname: row.productname,
       price: parseFloat(row.price || 0),
-      dprice: parseFloat(row.dprice || 0),   // ✅ include Dprice
+      dprice: parseFloat(row.dprice || 0),
       per: row.per,
       discount: parseFloat(row.discount || 0),
       image: row.image,
@@ -532,7 +491,6 @@ exports.getProductsByType = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch products', error: err.message });
   }
 };
-
 
 exports.getAproductsByType = async (req, res) => {
   try {
@@ -557,7 +515,7 @@ exports.getAproductsByType = async (req, res) => {
       serial_number: row.serial_number,
       productname: row.productname,
       price: parseFloat(row.price || 0),
-      dprice: parseFloat(row.dprice || 0),   // ✅ include Dprice
+      dprice: parseFloat(row.dprice || 0),
       per: row.per,
       discount: parseFloat(row.discount || 0),
       image: row.image,
@@ -571,11 +529,10 @@ exports.getAproductsByType = async (req, res) => {
   }
 };
 
-
 exports.getAllQuotations = async (req, res) => {
   try {
     const query = `
-      SELECT id, customer_id, quotation_id, products, net_rate, you_save, total, promo_discount, 
+      SELECT id, customer_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount,
              customer_name, address, mobile_number, email, district, state, customer_type, 
              status, created_at, updated_at, pdf
       FROM public.fwcquotations
@@ -592,7 +549,7 @@ exports.getAllQuotations = async (req, res) => {
 exports.createQuotation = async (req, res) => {
   try {
     const {
-      customer_id, quotation_id, products, net_rate, you_save, total, promo_discount,
+      customer_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount,
       customer_type, customer_name, address, mobile_number, email, district, state
     } = req.body;
 
@@ -603,10 +560,11 @@ exports.createQuotation = async (req, res) => {
     const parsedNetRate = parseFloat(net_rate) || 0;
     const parsedYouSave = parseFloat(you_save) || 0;
     const parsedPromoDiscount = parseFloat(promo_discount) || 0;
+    const parsedAdditionalDiscount = parseFloat(additional_discount) || 0;
     const parsedTotal = parseFloat(total);
 
-    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedTotal].some(v => isNaN(v)))
-      return res.status(400).json({ message: 'net_rate, you_save, promo_discount, and total must be valid numbers' });
+    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedAdditionalDiscount, parsedTotal].some(v => isNaN(v)))
+      return res.status(400).json({ message: 'net_rate, you_save, promo_discount, additional_discount, and total must be valid numbers' });
 
     let finalCustomerType = customer_type || 'User';
     let customerDetails = { customer_name, address, mobile_number, email, district, state };
@@ -656,13 +614,13 @@ exports.createQuotation = async (req, res) => {
       { quotation_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
       customerDetails,
       products,
-      { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount }
+      { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
     );
 
     const result = await pool.query(`
       INSERT INTO public.fwcquotations 
-      (customer_id, quotation_id, products, net_rate, you_save, total, promo_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW(),$16)
+      (customer_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17)
       RETURNING id, created_at, customer_type, pdf, quotation_id
     `, [
       customer_id || null,
@@ -672,6 +630,7 @@ exports.createQuotation = async (req, res) => {
       parsedYouSave,
       parsedTotal,
       parsedPromoDiscount,
+      parsedAdditionalDiscount,
       customerDetails.address || null,
       customerDetails.mobile_number || null,
       customerDetails.customer_name || null,
@@ -697,7 +656,8 @@ exports.createQuotation = async (req, res) => {
         customer_type: finalCustomerType,
         net_rate: parsedNetRate,
         you_save: parsedYouSave,
-        total: parsedTotal
+        total: parsedTotal,
+        additional_discount: parsedAdditionalDiscount
       },
       customerDetails,
       pdfPath,
@@ -722,7 +682,7 @@ exports.createQuotation = async (req, res) => {
 exports.updateQuotation = async (req, res) => {
   try {
     const { quotation_id } = req.params;
-    const { products, net_rate, you_save, total, promo_discount, status } = req.body;
+    const { products, net_rate, you_save, total, promo_discount, additional_discount, status } = req.body;
 
     if (!quotation_id || !/^[a-zA-Z0-9-_]+$/.test(quotation_id)) return res.status(400).json({ message: 'Invalid or missing Quotation ID' });
     if (products && (!Array.isArray(products) || products.length === 0)) return res.status(400).json({ message: 'Products array is required and must not be empty' });
@@ -732,10 +692,11 @@ exports.updateQuotation = async (req, res) => {
     const parsedNetRate = net_rate !== undefined ? parseFloat(net_rate) : undefined;
     const parsedYouSave = you_save !== undefined ? parseFloat(you_save) : undefined;
     const parsedPromoDiscount = promo_discount !== undefined ? parseFloat(promo_discount) : undefined;
+    const parsedAdditionalDiscount = additional_discount !== undefined ? parseFloat(additional_discount) : undefined;
     const parsedTotal = total !== undefined ? parseFloat(total) : undefined;
 
-    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedTotal].some(v => v !== undefined && isNaN(v)))
-      return res.status(400).json({ message: 'net_rate, you_save, total, and promo_discount must be valid numbers' });
+    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedAdditionalDiscount, parsedTotal].some(v => v !== undefined && isNaN(v)))
+      return res.status(400).json({ message: 'net_rate, you_save, total, promo_discount, and additional_discount must be valid numbers' });
 
     const quotationCheck = await pool.query(
       'SELECT * FROM public.fwcquotations WHERE quotation_id = $1',
@@ -792,7 +753,8 @@ exports.updateQuotation = async (req, res) => {
           net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
           you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
           total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0),
-          promo_discount: parsedPromoDiscount !== undefined ? parsedPromoDiscount : parseFloat(quotation.promo_discount || 0)
+          promo_discount: parsedPromoDiscount !== undefined ? parsedPromoDiscount : parseFloat(quotation.promo_discount || 0),
+          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(quotation.additional_discount || 0)
         }
       );
       pdfPath = pdfResult.pdfPath;
@@ -811,7 +773,8 @@ exports.updateQuotation = async (req, res) => {
           customer_type: quotation.customer_type,
           net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
           you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
-          total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0)
+          total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0),
+          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(quotation.additional_discount || 0)
         },
         customerDetails,
         pdfPath,
@@ -843,6 +806,10 @@ exports.updateQuotation = async (req, res) => {
     if (parsedPromoDiscount !== undefined) {
       updateFields.push(`promo_discount = $${paramIndex++}`);
       updateValues.push(parsedPromoDiscount);
+    }
+    if (parsedAdditionalDiscount !== undefined) {
+      updateFields.push(`additional_discount = $${paramIndex++}`);
+      updateValues.push(parsedAdditionalDiscount);
     }
     if (pdfPath) {
       updateFields.push(`pdf = $${paramIndex++}`);
@@ -912,7 +879,7 @@ exports.getQuotation = async (req, res) => {
     console.log(`Fetching quotation with ID: ${quotation_id}`);
 
     let quotationQuery = await pool.query(
-      'SELECT products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.fwcquotations WHERE quotation_id = $1',
+      'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.fwcquotations WHERE quotation_id = $1',
       [quotation_id]
     );
 
@@ -922,7 +889,7 @@ exports.getQuotation = async (req, res) => {
       if (parts.length > 1) {
         const possibleQuotationId = parts.slice(1).join('-');
         quotationQuery = await pool.query(
-          'SELECT products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.fwcquotations WHERE quotation_id = $1',
+          'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.fwcquotations WHERE quotation_id = $1',
           [possibleQuotationId]
         );
       }
@@ -933,7 +900,7 @@ exports.getQuotation = async (req, res) => {
       return res.status(404).json({ message: 'Quotation not found' });
     }
 
-    const { products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status } = quotationQuery.rows[0];
+    const { products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status } = quotationQuery.rows[0];
     console.log(`Quotation found: ${quotation_id}, status: ${status}, pdf: ${pdf}`);
 
     let agent_name = null;
@@ -958,7 +925,8 @@ exports.getQuotation = async (req, res) => {
           net_rate: parseFloat(net_rate || 0), 
           you_save: parseFloat(you_save || 0), 
           total: parseFloat(total || 0), 
-          promo_discount: parseFloat(promo_discount || 0) 
+          promo_discount: parseFloat(promo_discount || 0),
+          additional_discount: parseFloat(additional_discount || 0)
         }
       );
       pdfPath = pdfResult.pdfPath;
@@ -975,7 +943,8 @@ exports.getQuotation = async (req, res) => {
           customer_type,
           net_rate: parseFloat(net_rate || 0),
           you_save: parseFloat(you_save || 0),
-          total: parseFloat(total || 0)
+          total: parseFloat(total || 0),
+          additional_discount: parseFloat(additional_discount || 0)
         },
         { customer_name, address, mobile_number, email, district, state },
         pdfPath,
@@ -1003,7 +972,7 @@ exports.getQuotation = async (req, res) => {
 exports.createBooking = async (req, res) => {
   try {
     const {
-      customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount,
+      customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount,
       customer_type, customer_name, address, mobile_number, email, district, state
     } = req.body;
 
@@ -1019,10 +988,11 @@ exports.createBooking = async (req, res) => {
     const parsedNetRate = parseFloat(net_rate) || 0;
     const parsedYouSave = parseFloat(you_save) || 0;
     const parsedPromoDiscount = parseFloat(promo_discount) || 0;
+    const parsedAdditionalDiscount = parseFloat(additional_discount) || 0;
     const parsedTotal = parseFloat(total);
 
-    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedTotal].some(v => isNaN(v)))
-      return res.status(400).json({ message: 'net_rate, you_save, promo_discount, and total must be valid numbers' });
+    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedAdditionalDiscount, parsedTotal].some(v => isNaN(v)))
+      return res.status(400).json({ message: 'net_rate, you_save, promo_discount, additional_discount, and total must be valid numbers' });
 
     let finalCustomerType = customer_type || 'User';
     let customerDetails = { customer_name, address, mobile_number, email, district, state };
@@ -1074,26 +1044,27 @@ exports.createBooking = async (req, res) => {
       { order_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
       customerDetails,
       products,
-      { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount }
+      { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
     );
 
     await pool.query('BEGIN');
 
-    // Insert the booking
+    // Updated INSERT query: Removed created_at from the column list
     const bookingResult = await pool.query(`
       INSERT INTO public.bookings 
-      (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), $17)
+      (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, pdf)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING id, created_at, customer_type, pdf, order_id
     `, [
       customer_id || null,
       order_id,
-      quotation_id || null, // Include quotation_id if provided
+      quotation_id || null,
       JSON.stringify(products),
       parsedNetRate,
       parsedYouSave,
       parsedTotal,
       parsedPromoDiscount,
+      parsedAdditionalDiscount,
       customerDetails.address || null,
       customerDetails.mobile_number || null,
       customerDetails.customer_name || null,
@@ -1105,7 +1076,6 @@ exports.createBooking = async (req, res) => {
       pdfPath
     ]);
 
-    // Update the quotation status to "booked" if quotation_id is provided
     if (quotation_id) {
       const quotationCheck = await pool.query(
         'SELECT id FROM public.fwcquotations WHERE quotation_id = $1 AND status = $2',
@@ -1129,7 +1099,6 @@ exports.createBooking = async (req, res) => {
       console.error('WhatsApp PDF sending failed:', err);
     }
 
-    // Send email to admin
     await sendBookingEmail(
       'nivasramasamy27@gmail.com',
       {
@@ -1137,7 +1106,8 @@ exports.createBooking = async (req, res) => {
         customer_type: finalCustomerType,
         net_rate: parsedNetRate,
         you_save: parsedYouSave,
-        total: parsedTotal
+        total: parsedTotal,
+        additional_discount: parsedAdditionalDiscount
       },
       customerDetails,
       pdfPath,
@@ -1145,7 +1115,6 @@ exports.createBooking = async (req, res) => {
       'invoice'
     );
 
-    // Send email to customer if email exists
     if (customerDetails.email) {
       await sendBookingEmail(
         customerDetails.email,
@@ -1154,7 +1123,8 @@ exports.createBooking = async (req, res) => {
           customer_type: finalCustomerType,
           net_rate: parsedNetRate,
           you_save: parsedYouSave,
-          total: parsedTotal
+          total: parsedTotal,
+          additional_discount: parsedAdditionalDiscount
         },
         customerDetails,
         pdfPath,
@@ -1174,7 +1144,7 @@ exports.createBooking = async (req, res) => {
       customer_type: bookingResult.rows[0].customer_type,
       pdf_path: bookingResult.rows[0].pdf,
       order_id: bookingResult.rows[0].order_id,
-      quotation_id // Return quotation_id for frontend use
+      quotation_id
     });
   } catch (err) {
     await pool.query('ROLLBACK');
@@ -1186,7 +1156,7 @@ exports.createBooking = async (req, res) => {
 exports.updateBooking = async (req, res) => {
   try {
     const { order_id } = req.params;
-    const { products, net_rate, you_save, total, promo_discount, status, transport_details } = req.body;
+    const { products, net_rate, you_save, total, promo_discount, additional_discount, status, transport_details } = req.body;
 
     if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) return res.status(400).json({ message: 'Invalid or missing Order ID' });
     if (products && (!Array.isArray(products) || products.length === 0)) return res.status(400).json({ message: 'Products array is required and must not be empty' });
@@ -1197,10 +1167,11 @@ exports.updateBooking = async (req, res) => {
     const parsedNetRate = net_rate !== undefined ? parseFloat(net_rate) : undefined;
     const parsedYouSave = you_save !== undefined ? parseFloat(you_save) : undefined;
     const parsedPromoDiscount = promo_discount !== undefined ? parseFloat(promo_discount) : undefined;
+    const parsedAdditionalDiscount = additional_discount !== undefined ? parseFloat(additional_discount) : undefined;
     const parsedTotal = total !== undefined ? parseFloat(total) : undefined;
 
-    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedTotal].some(v => v !== undefined && isNaN(v)))
-      return res.status(400).json({ message: 'net_rate, you_save, total, and promo_discount must be valid numbers' });
+    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedAdditionalDiscount, parsedTotal].some(v => v !== undefined && isNaN(v)))
+      return res.status(400).json({ message: 'net_rate, you_save, total, promo_discount, and additional_discount must be valid numbers' });
 
     const bookingCheck = await pool.query(
       'SELECT * FROM public.bookings WHERE order_id = $1',
@@ -1257,7 +1228,8 @@ exports.updateBooking = async (req, res) => {
           net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
           you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
           total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0),
-          promo_discount: parsedPromoDiscount !== undefined ? parsedPromoDiscount : parseFloat(booking.promo_discount || 0)
+          promo_discount: parsedPromoDiscount !== undefined ? parsedPromoDiscount : parseFloat(booking.promo_discount || 0),
+          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(booking.additional_discount || 0)
         }
       );
       pdfPath = pdfResult.pdfPath;
@@ -1294,6 +1266,10 @@ exports.updateBooking = async (req, res) => {
       updateFields.push(`promo_discount = $${paramIndex++}`);
       updateValues.push(parsedPromoDiscount);
     }
+    if (parsedAdditionalDiscount !== undefined) {
+      updateFields.push(`additional_discount = $${paramIndex++}`);
+      updateValues.push(parsedAdditionalDiscount);
+    }
     if (pdfPath) {
       updateFields.push(`pdf = $${paramIndex++}`);
       updateValues.push(pdfPath);
@@ -1322,7 +1298,6 @@ exports.updateBooking = async (req, res) => {
 
     const result = await pool.query(query, updateValues);
 
-    // Send email to customer if email exists and status is updated
     if (customerDetails.email && status) {
       await sendBookingEmail(
         customerDetails.email,
@@ -1331,7 +1306,8 @@ exports.updateBooking = async (req, res) => {
           customer_type: booking.customer_type,
           net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
           you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
-          total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0)
+          total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0),
+          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(booking.additional_discount || 0)
         },
         customerDetails,
         pdfPath,
@@ -1342,7 +1318,6 @@ exports.updateBooking = async (req, res) => {
       );
     }
 
-    // Send email to admin
     await sendBookingEmail(
       'nivasramasamy27@gmail.com',
       {
@@ -1350,7 +1325,8 @@ exports.updateBooking = async (req, res) => {
         customer_type: booking.customer_type,
         net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
         you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
-        total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0)
+        total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0),
+        additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(booking.additional_discount || 0)
       },
       customerDetails,
       pdfPath,
@@ -1381,7 +1357,7 @@ exports.getInvoice = async (req, res) => {
     console.log(`Fetching invoice with ID: ${order_id}`);
 
     const bookingQuery = await pool.query(
-      'SELECT products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.bookings WHERE order_id = $1',
+      'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.bookings WHERE order_id = $1',
       [order_id]
     );
 
@@ -1390,7 +1366,7 @@ exports.getInvoice = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found' });
     }
 
-    const { products, net_rate, you_save, total, promo_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status } = bookingQuery.rows[0];
+    const { products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status } = bookingQuery.rows[0];
     let agent_name = null;
     if (customer_type === 'Customer of Selected Agent' && customer_id) {
       const customerCheck = await pool.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
@@ -1413,7 +1389,8 @@ exports.getInvoice = async (req, res) => {
           net_rate: parseFloat(net_rate || 0), 
           you_save: parseFloat(you_save || 0), 
           total: parseFloat(total || 0), 
-          promo_discount: parseFloat(promo_discount || 0) 
+          promo_discount: parseFloat(promo_discount || 0),
+          additional_discount: parseFloat(additional_discount || 0)
         }
       );
       pdfPath = pdfResult.pdfPath;
@@ -1430,7 +1407,8 @@ exports.getInvoice = async (req, res) => {
           customer_type,
           net_rate: parseFloat(net_rate || 0),
           you_save: parseFloat(you_save || 0),
-          total: parseFloat(total || 0)
+          total: parseFloat(total || 0),
+          additional_discount: parseFloat(additional_discount || 0)
         },
         { customer_name, address, mobile_number, email, district, state },
         pdfPath,
@@ -1465,7 +1443,7 @@ exports.searchBookings = async (req, res) => {
 
     const query = `
       SELECT id, order_id, quotation_id, products, net_rate, you_save, total, 
-             promo_discount, customer_name, address, mobile_number, email, district, state, 
+             promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, 
              customer_type, status, created_at, pdf, transport_name, lr_number, transport_contact,
              processing_date, dispatch_date, delivery_date
       FROM public.bookings 
@@ -1492,7 +1470,7 @@ exports.searchQuotations = async (req, res) => {
 
     const query = `
       SELECT id, quotation_id, products, net_rate, you_save, total, 
-             promo_discount, customer_name, address, mobile_number, email, district, state, 
+             promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, 
              customer_type, status, created_at, pdf
       FROM public.fwcquotations
       WHERE LOWER(customer_name) LIKE LOWER($1) 
@@ -1502,7 +1480,6 @@ exports.searchQuotations = async (req, res) => {
 
     const result = await pool.query(query, [`%${customer_name}%`, `%${mobile_number}%`]);
     
-    // Add empty transport details to maintain consistent response structure
     const quotations = result.rows.map(row => ({
       ...row,
       type: 'quotation',
