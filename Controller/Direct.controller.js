@@ -6,6 +6,7 @@ const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 
+// Initialize PostgreSQL pool
 const pool = new Pool({
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
@@ -19,10 +20,14 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
     try {
       const doc = new PDFDocument({ margin: 50, size: 'A4' });
       const safeCustomerName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      const pdfDir = path.join(__dirname, '../pdf_data');
-      if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+      const pdfDir = path.resolve(__dirname, '../pdf_data'); // Use absolute path
+      if (!fs.existsSync(pdfDir)) {
+        fs.mkdirSync(pdfDir, { recursive: true });
+        // Set directory permissions for server compatibility (read/write for owner and group)
+        fs.chmodSync(pdfDir, 0o770);
+      }
       const pdfPath = path.join(pdfDir, `${safeCustomerName}-${data.order_id || data.quotation_id}-${type}.pdf`);
-      const stream = fs.createWriteStream(pdfPath);
+      const stream = fs.createWriteStream(pdfPath, { flags: 'w', mode: 0o660 }); // Set file permissions
       doc.pipe(stream);
 
       // Header
@@ -68,7 +73,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       // Table Header
       doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
       doc.fontSize(10).font('Helvetica-Bold')
-        .text('Sl.N', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'center' })
+        .text('Sl.No', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'center' })
         .text('Product', colX[1] + 5, tableY, { width: colWidths[1] - 10, align: 'left' })
         .text('Qty', colX[2] + 5, tableY, { width: colWidths[2] - 10, align: 'center' })
         .text('Rate', colX[3] + 5, tableY, { width: colWidths[3] - 10, align: 'left' })
@@ -172,13 +177,25 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
       doc.end();
       stream.on('finish', () => {
-        resolve({ pdfPath, calculatedTotal: total });
+        // Verify file existence after creation
+        if (!fs.existsSync(pdfPath)) {
+          reject(new Error(`PDF file not created at ${pdfPath}`));
+          return;
+        }
+        // Verify file readability
+        fs.access(pdfPath, fs.constants.R_OK, (err) => {
+          if (err) {
+            reject(new Error(`PDF file at ${pdfPath} is not readable: ${err.message}`));
+            return;
+          }
+          resolve({ pdfPath, calculatedTotal: total });
+        });
       });
       stream.on('error', (err) => {
-        reject(err);
+        reject(new Error(`Stream error while creating PDF at ${pdfPath}: ${err.message}`));
       });
     } catch (err) {
-      reject(err);
+      reject(new Error(`Error generating PDF: ${err.message}`));
     }
   });
 };
@@ -606,13 +623,21 @@ exports.createQuotation = async (req, res) => {
       console.error(`Failed to send quotation email to nivasramasamy27@gmail.com: ${emailError.message}`);
     }
 
-    res.status(201).json({
-      message: 'Quotation created successfully',
-      id: result.rows[0].id,
-      created_at: result.rows[0].created_at,
-      customer_type: result.rows[0].customer_type,
-      pdf_path: result.rows[0].pdf,
-      quotation_id: result.rows[0].quotation_id
+    // Stream PDF for automatic download
+    if (!fs.existsSync(pdfPath)) {
+      return res.status(500).json({ message: 'PDF file not found after generation', error: 'File system error' });
+    }
+    fs.access(pdfPath, fs.constants.R_OK, (err) => {
+      if (err) {
+        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=${path.basename(pdfPath)}`);
+      const readStream = fs.createReadStream(pdfPath);
+      readStream.on('error', (streamErr) => {
+        res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message });
+      });
+      readStream.pipe(res);
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to create quotation', error: err.message });
@@ -775,12 +800,21 @@ exports.updateQuotation = async (req, res) => {
 
     const result = await pool.query(query, updateValues);
 
-    res.status(200).json({
-      message: 'Quotation updated successfully',
-      id: result.rows[0].id,
-      quotation_id: result.rows[0].quotation_id,
-      status: result.rows[0].status,
-      pdf_path: pdfPath
+    // Stream PDF for automatic download
+    if (!fs.existsSync(pdfPath)) {
+      return res.status(500).json({ message: 'PDF file not found after update', error: 'File system error' });
+    }
+    fs.access(pdfPath, fs.constants.R_OK, (err) => {
+      if (err) {
+        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=${path.basename(pdfPath)}`);
+      const readStream = fs.createReadStream(pdfPath);
+      readStream.on('error', (streamErr) => {
+        res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message });
+      });
+      readStream.pipe(res);
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update quotation', error: err.message });
@@ -884,10 +918,19 @@ exports.getQuotation = async (req, res) => {
       return res.status(500).json({ message: 'PDF file not found after generation', error: 'File system error' });
     }
 
-    const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${quotation_id}-quotation.pdf`);
-    fs.createReadStream(pdfPath).pipe(res);
+    fs.access(pdfPath, fs.constants.R_OK, (err) => {
+      if (err) {
+        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message });
+      }
+      const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${quotation_id}-quotation.pdf`);
+      const readStream = fs.createReadStream(pdfPath);
+      readStream.on('error', (streamErr) => {
+        res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message });
+      });
+      readStream.pipe(res);
+    });
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch quotation', error: err.message });
   }
@@ -1063,14 +1106,21 @@ exports.createBooking = async (req, res) => {
 
     await pool.query('COMMIT');
 
-    res.status(201).json({
-      message: 'Booking created successfully',
-      id: bookingResult.rows[0].id,
-      created_at: bookingResult.rows[0].created_at,
-      customer_type: bookingResult.rows[0].customer_type,
-      pdf_path: bookingResult.rows[0].pdf,
-      order_id: bookingResult.rows[0].order_id,
-      quotation_id
+    // Stream PDF for automatic download
+    if (!fs.existsSync(pdfPath)) {
+      return res.status(500).json({ message: 'PDF file not found after generation', error: 'File system error' });
+    }
+    fs.access(pdfPath, fs.constants.R_OK, (err) => {
+      if (err) {
+        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=${path.basename(pdfPath)}`);
+      const readStream = fs.createReadStream(pdfPath);
+      readStream.on('error', (streamErr) => {
+        res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message });
+      });
+      readStream.pipe(res);
     });
   } catch (err) {
     await pool.query('ROLLBACK');
@@ -1220,8 +1270,8 @@ exports.updateBooking = async (req, res) => {
 
     const result = await pool.query(query, updateValues);
 
-    if (customerDetails.email && status) {
-      try {
+    try {
+      if (customerDetails.email && status) {
         await sendBookingEmail(
           customerDetails.email,
           {
@@ -1239,9 +1289,9 @@ exports.updateBooking = async (req, res) => {
           status,
           transport_details
         );
-      } catch (emailError) {
-        console.error(`Failed to send booking update email to ${customerDetails.email}: ${emailError.message}`);
       }
+    } catch (emailError) {
+      console.error(`Failed to send booking update email to ${customerDetails.email}: ${emailError.message}`);
     }
 
     try {
@@ -1266,12 +1316,21 @@ exports.updateBooking = async (req, res) => {
       console.error(`Failed to send booking update email to nivasramasamy27@gmail.com: ${emailError.message}`);
     }
 
-    res.status(200).json({
-      message: 'Booking updated successfully',
-      id: result.rows[0].id,
-      order_id: result.rows[0].order_id,
-      status: result.rows[0].status,
-      pdf_path: pdfPath
+    // Stream PDF for automatic download
+    if (!fs.existsSync(pdfPath)) {
+      return res.status(500).json({ message: 'PDF file not found after update', error: 'File system error' });
+    }
+    fs.access(pdfPath, fs.constants.R_OK, (err) => {
+      if (err) {
+        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=${path.basename(pdfPath)}`);
+      const readStream = fs.createReadStream(pdfPath);
+      readStream.on('error', (streamErr) => {
+        res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message });
+      });
+      readStream.pipe(res);
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update booking', error: err.message });
@@ -1342,10 +1401,19 @@ exports.getInvoice = async (req, res) => {
       return res.status(500).json({ message: 'PDF file not found after generation', error: 'File system error' });
     }
 
-    const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
-    fs.createReadStream(pdfPath).pipe(res);
+    fs.access(pdfPath, fs.constants.R_OK, (err) => {
+      if (err) {
+        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message });
+      }
+      const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
+      const readStream = fs.createReadStream(pdfPath);
+      readStream.on('error', (streamErr) => {
+        res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message });
+      });
+      readStream.pipe(res);
+    });
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });
   }
