@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
-const nodemailer = require('nodemailer');
 
 // Initialize PostgreSQL pool
 const pool = new Pool({
@@ -257,7 +256,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text(`Total: Rs.${total.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
       y += 20;
       if (additionalDiscount > 0) {
-        doc.text(`Discount: Rs.${additionalDiscountAmount.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
+        doc.text(`Extra Discount: Rs.${additionalDiscountAmount.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
         y += 20;
         doc.text(`Grand Total: Rs.${grandTotal.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
         y += 20;
@@ -294,70 +293,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
     }
   });
 };
-
-async function sendBookingEmail(to, details, customerDetails, pdfPath, products, type, status, transport_details) {
-  const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-    pool: false,
-    maxConnections: 1,
-    socketTimeout: 30000,
-    connectionTimeout: 30000,
-    logger: false,
-    debug: false,
-  });
-
-  const mailOptions = {
-    from: `"FWC Booking" <${process.env.EMAIL_USER}>`,
-    to,
-    subject: type === 'invoice' ? `Your Invoice ${details.order_id}` : `Your Quotation ${details.quotation_id}`,
-    text: `Dear ${customerDetails.customer_name || 'Customer'},
-
-Thank you for your ${type === 'invoice' ? 'booking' : 'quotation'} with us.
-
-Details:
-- ${type === 'invoice' ? 'Order ID' : 'Quotation ID'}: ${type === 'invoice' ? details.order_id : details.quotation_id}
-- Customer Type: ${details.customer_type}
-- Net Rate: ₹${details.net_rate}
-- You Save: ₹${details.you_save}
-- Total: ₹${details.total}
-${details.additional_discount > 0 ? `- Additional Discount: ${details.additional_discount}%` : ''}
-${status ? `- Status: ${status}` : ''}
-${transport_details ? `- Transport Details: ${JSON.stringify(transport_details)}` : ''}
-
-Please find the ${type} attached for your reference.
-
-Best regards,
-FWC Team`,
-    attachments: [
-      {
-        filename: path.basename(pdfPath),
-        path: pdfPath,
-        contentType: 'application/pdf',
-      },
-    ],
-  };
-
-  try {
-    await transporter.sendMail(mailOptions);
-    console.log(`Email sent to ${to} for ${type === 'invoice' ? 'order_id: ' + details.order_id : 'quotation_id: ' + details.quotation_id}`);
-    return { status: 'Email sent' };
-  } catch (error) {
-    console.error(`Email failed to ${to} for ${type === 'invoice' ? 'order_id: ' + details.order_id : 'quotation_id: ' + details.quotation_id}: ${error.message}`);
-    const logDir = path.join(__dirname, '../logs');
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
-    }
-    const errorLogPath = path.join(logDir, 'email_errors.log');
-    fs.appendFileSync(errorLogPath, `Email to ${to} failed at ${new Date().toISOString()}: ${error.message}\n`);
-    return { status: 'Email failed' };
-  }
-}
 
 exports.getCustomers = async (req, res) => {
   try {
@@ -607,53 +542,6 @@ exports.createQuotation = async (req, res) => {
 
       await client.query('COMMIT');
 
-      // Send email to customer if email exists
-      if (customerDetails.email) {
-        try {
-          await sendBookingEmail(
-            customerDetails.email,
-            {
-              quotation_id,
-              customer_type: finalCustomerType,
-              net_rate: parsedNetRate,
-              you_save: parsedYouSave,
-              total: parsedTotal,
-              additional_discount: parsedAdditionalDiscount
-            },
-            customerDetails,
-            pdfPath,
-            enhancedProducts,
-            'quotation',
-            'pending'
-          );
-        } catch (emailError) {
-          console.error(`Failed to send quotation email to ${customerDetails.email} for quotation_id ${quotation_id}: ${emailError.message}`);
-        }
-      }
-
-      // Send email to admin
-      const adminEmail = process.env.ADMIN_EMAIL || 'nivasramasamy27@gmail.com';
-      try {
-        await sendBookingEmail(
-          adminEmail,
-          {
-            quotation_id,
-            customer_type: finalCustomerType,
-            net_rate: parsedNetRate,
-            you_save: parsedYouSave,
-            total: parsedTotal,
-            additional_discount: parsedAdditionalDiscount
-          },
-          customerDetails,
-          pdfPath,
-          enhancedProducts,
-          'quotation',
-          'pending'
-        );
-      } catch (emailError) {
-        console.error(`Failed to send quotation email to ${adminEmail} for quotation_id ${quotation_id}: ${emailError.message}`);
-      }
-
       res.status(200).json({
         message: 'Quotation created successfully',
         quotation_id: result.rows[0].quotation_id,
@@ -820,53 +708,6 @@ exports.updateQuotation = async (req, res) => {
     updateValues.push(quotation_id);
 
     const result = await pool.query(query, updateValues);
-
-    // Send email to customer if email exists
-    if (customerDetails.email) {
-      try {
-        await sendBookingEmail(
-          customerDetails.email,
-          {
-            quotation_id,
-            customer_type: quotation.customer_type,
-            net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
-            you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
-            total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0),
-            additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(quotation.additional_discount || 0)
-          },
-          customerDetails,
-          pdfPath,
-          enhancedProducts,
-          'quotation',
-          status
-        );
-      } catch (emailError) {
-        console.error(`Failed to send quotation update email to ${customerDetails.email} for quotation_id ${quotation_id}: ${emailError.message}`);
-      }
-    }
-
-    // Send email to admin
-    const adminEmail = process.env.ADMIN_EMAIL || 'nivasramasamy27@gmail.com';
-    try {
-      await sendBookingEmail(
-        adminEmail,
-        {
-          quotation_id,
-          customer_type: quotation.customer_type,
-          net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
-          you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
-          total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0),
-          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(quotation.additional_discount || 0)
-        },
-        customerDetails,
-        pdfPath,
-        enhancedProducts,
-        'quotation',
-        status
-      );
-    } catch (emailError) {
-      console.error(`Failed to send quotation update email to ${adminEmail} for quotation_id ${quotation_id}: ${emailError.message}`);
-    }
 
     if (!fs.existsSync(pdfPath)) {
       console.error(`Failed: PDF file not found at ${pdfPath} for quotation_id ${quotation_id}`);
@@ -1179,54 +1020,6 @@ exports.createBooking = async (req, res) => {
       }
 
       await client.query('COMMIT');
-
-      // Send email to customer if email exists
-      if (customerDetails.email) {
-        try {
-          await sendBookingEmail(
-            customerDetails.email,
-            {
-              order_id,
-              customer_type: finalCustomerType,
-              net_rate: parsedNetRate,
-              you_save: parsedYouSave,
-              total: parsedTotal,
-              additional_discount: parsedAdditionalDiscount
-            },
-            customerDetails,
-            pdfPath,
-            enhancedProducts,
-            'invoice',
-            'booked'
-          );
-        } catch (emailError) {
-          console.error(`Failed to send booking email to ${customerDetails.email} for order_id ${order_id}: ${emailError.message}`);
-        }
-      }
-
-      // Send email to admin
-      const adminEmail = process.env.ADMIN_EMAIL || 'nivasramasamy27@gmail.com';
-      try {
-        await sendBookingEmail(
-          adminEmail,
-          {
-            order_id,
-            customer_type: finalCustomerType,
-            net_rate: parsedNetRate,
-            you_save: parsedYouSave,
-            total: parsedTotal,
-            additional_discount: parsedAdditionalDiscount
-          },
-          customerDetails,
-          pdfPath,
-          enhancedProducts,
-          'invoice',
-          'booked'
-        );
-      } catch (emailError) {
-        console.error(`Failed to send booking email to ${adminEmail} for order_id ${order_id}: ${emailError.message}`);
-      }
-
       res.status(200).json({
         message: 'Booking created successfully',
         order_id: result.rows[0].order_id,
@@ -1396,55 +1189,6 @@ exports.updateBooking = async (req, res) => {
     updateValues.push(order_id);
 
     const result = await pool.query(query, updateValues);
-
-    // Send email to customer if email exists
-    if (customerDetails.email) {
-      try {
-        await sendBookingEmail(
-          customerDetails.email,
-          {
-            order_id,
-            customer_type: booking.customer_type,
-            net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
-            you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
-            total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0),
-            additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(booking.additional_discount || 0)
-          },
-          customerDetails,
-          pdfPath,
-          enhancedProducts,
-          'invoice',
-          status,
-          transport_details
-        );
-      } catch (emailError) {
-        console.error(`Failed to send booking update email to ${customerDetails.email} for order_id ${order_id}: ${emailError.message}`);
-      }
-    }
-
-    // Send email to admin
-    const adminEmail = process.env.ADMIN_EMAIL || 'nivasramasamy27@gmail.com';
-    try {
-      await sendBookingEmail(
-        adminEmail,
-        {
-          order_id,
-          customer_type: booking.customer_type,
-          net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(booking.net_rate || 0),
-          you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(booking.you_save || 0),
-          total: parsedTotal !== undefined ? parsedTotal : parseFloat(booking.total || 0),
-          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(booking.additional_discount || 0)
-        },
-        customerDetails,
-        pdfPath,
-        enhancedProducts,
-        'invoice',
-        status,
-        transport_details
-      );
-    } catch (emailError) {
-      console.error(`Failed to send booking update email to ${adminEmail} for order_id ${order_id}: ${emailError.message}`);
-    }
 
     if (!fs.existsSync(pdfPath)) {
       console.error(`Failed: PDF file not found at ${pdfPath} for order_id ${order_id}`);
