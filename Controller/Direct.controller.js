@@ -298,7 +298,7 @@ exports.getCustomers = async (req, res) => {
   try {
     const query = `
       SELECT id, customer_name AS name, address, mobile_number, email, customer_type, district, state, agent_id
-      FROM public.customers
+      FROM public.customers ORDER BY id DESC;
     `;
     const result = await pool.query(query);
     res.status(200).json(result.rows);
