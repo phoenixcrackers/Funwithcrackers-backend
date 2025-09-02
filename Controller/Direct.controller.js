@@ -27,6 +27,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const stream = fs.createWriteStream(pdfPath, { flags: 'w', mode: 0o660 });
       doc.pipe(stream);
 
+      // Header
       doc.fontSize(20).font('Helvetica-Bold').text(type === 'quotation' ? 'Quotation' : 'Estimate Bill', 50, 50, { align: 'center' });
       doc.fontSize(12).font('Helvetica')
         .text('Phoenix Crackers', 50, 80)
@@ -35,6 +36,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('Email: nivasramasamy27@gmail.com', 50, 125)
         .text('Website: www.funwithcrackers.com', 50, 140);
 
+      // Customer Details
       const customerType = data.customer_type === 'Customer of Selected Agent' ? 'Customer - Agent' : data.customer_type || 'User';
       let addressLine1 = customerDetails.address || 'N/A';
       let addressLine2 = '';
@@ -57,6 +59,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         doc.text(`Agent: ${data.agent_name}`, 300, 215, { align: 'right' });
       }
 
+      // Table Setup
       const tableY = 250;
       const tableWidth = 500;
       const colWidths = [30, 150, 50, 70, 70, 50, 100];
@@ -64,66 +67,25 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const rowHeight = 25;
       const pageHeight = doc.page.height - doc.page.margins.bottom;
 
-      doc.moveTo(50, tableY - 5).lineTo(50 + tableWidth, tableY - 5).stroke();
-      doc.fontSize(10).font('Helvetica-Bold')
-        .text('Sl.No', colX[0] + 5, tableY, { width: colWidths[0] - 10, align: 'center' })
-        .text('Product', colX[1] + 5, tableY, { width: colWidths[1] - 10, align: 'left' })
-        .text('Qty', colX[2] + 5, tableY, { width: colWidths[2] - 10, align: 'center' })
-        .text('Rate', colX[3] + 5, tableY, { width: colWidths[3] - 10, align: 'left' })
-        .text('Disc Rate', colX[4] + 5, tableY, { width: colWidths[4] - 10, align: 'left' })
-        .text('Per', colX[5] + 5, tableY, { width: colWidths[5] - 10, align: 'center' })
-        .text('Total', colX[6] + 5, tableY, { width: colWidths[6] - 10, align: 'left' });
-      doc.moveTo(50, tableY + 15).lineTo(50 + tableWidth, tableY + 15).stroke();
-      colX.forEach((x, i) => {
-        doc.moveTo(x, tableY - 5).lineTo(x, tableY + 15).stroke();
-        if (i === colX.length - 1) {
-          doc.moveTo(x + colWidths[i], tableY - 5).lineTo(x + colWidths[i], tableY + 15).stroke();
-        }
-      });
+      // Initialize y
+      let y = tableY;
 
-      let y = tableY + rowHeight;
-      products.forEach((product, index) => {
-        if (y + rowHeight > pageHeight - 50) {
-          doc.addPage();
-          y = doc.page.margins.top + 20;
-          doc.moveTo(50, y - 5).lineTo(50 + tableWidth, y - 5).stroke();
-          doc.fontSize(10).font('Helvetica-Bold')
-            .text('Sl.N', colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
-            .text('Product', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
-            .text('Qty', colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
-            .text('Rate', colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
-            .text('Disc Rate', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
-            .text('Per', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
-            .text('Total', colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
-          doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
-          colX.forEach((x, i) => {
-            doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
-            if (i === colX.length - 1) {
-              doc.moveTo(x + colWidths[i], y - 5).lineTo(x + colWidths[i], y + 15).stroke();
-            }
-          });
-          y += rowHeight;
-        }
+      // Split products into discounted and non-discounted
+      const discountedProducts = products.filter(p => parseFloat(p.discount || 0) > 0);
+      const netRateProducts = products.filter(p => !p.discount || parseFloat(p.discount) === 0);
 
-        const price = parseFloat(product.price) || 0;
-        const discount = parseFloat(product.discount || 0) || 0;
-        const discRate = price - (price * discount / 100);
-        const productTotal = discRate * (product.quantity || 1);
-
-        let productName = product.productname || 'N/A';
-        if (productName.length > 30) {
-          productName = productName.substring(0, 27) + '...';
-        }
-
-        doc.font('Helvetica')
-          .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
-          .text(productName, colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
-          .text(product.quantity || 1, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
-          .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
-          .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
-          .text(product.per || 'N/A', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
-          .text(`Rs.${productTotal.toFixed(2)}`, colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
-
+      // Primary Table (Discounted Products)
+      if (discountedProducts.length > 0) {
+        doc.fontSize(12).font('Helvetica-Bold').text('DISCOUNTED PRODUCTS', 50, y - 20);
+        doc.moveTo(50, y - 5).lineTo(50 + tableWidth, y - 5).stroke();
+        doc.fontSize(10).font('Helvetica-Bold')
+          .text('Sl.N', colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
+          .text('Product', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
+          .text('Qty', colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
+          .text('Rate', colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
+          .text('Disc Rate', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+          .text('Per', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
+          .text('Total', colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
         doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
         colX.forEach((x, i) => {
           doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
@@ -133,8 +95,151 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         });
 
         y += rowHeight;
-      });
+        discountedProducts.forEach((product, index) => {
+          if (y + rowHeight > pageHeight - 50) {
+            doc.addPage();
+            y = doc.page.margins.top + 20;
+            doc.fontSize(12).font('Helvetica-Bold').text('DISCOUNTED PRODUCTS (Continued)', 50, y - 20);
+            doc.moveTo(50, y - 5).lineTo(50 + tableWidth, y - 5).stroke();
+            doc.fontSize(10).font('Helvetica-Bold')
+              .text('Sl.N', colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
+              .text('Product', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
+              .text('Qty', colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
+              .text('Rate', colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
+              .text('Disc Rate', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+              .text('Per', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
+              .text('Total', colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
+            doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
+            colX.forEach((x, i) => {
+              doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
+              if (i === colX.length - 1) {
+                doc.moveTo(x + colWidths[i], y - 5).lineTo(x + colWidths[i], y + 15).stroke();
+              }
+            });
+            y += rowHeight;
+          }
 
+          const price = parseFloat(product.price) || 0;
+          const discount = parseFloat(product.discount || 0) || 0;
+          const discRate = price - (price * discount / 100);
+          const productTotal = discRate * (product.quantity || 1);
+
+          let productName = product.productname || 'N/A';
+          if (productName.length > 30) {
+            productName = productName.substring(0, 27) + '...';
+          }
+
+          doc.font('Helvetica')
+            .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
+            .text(productName, colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
+            .text(product.quantity || 1, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
+            .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
+            .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+            .text(product.per || 'N/A', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
+            .text(`Rs.${productTotal.toFixed(2)}`, colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
+
+          doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
+          colX.forEach((x, i) => {
+            doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
+            if (i === colX.length - 1) {
+              doc.moveTo(x + colWidths[i], y - 5).lineTo(x + colWidths[i], y + 15).stroke();
+            }
+          });
+
+          y += rowHeight;
+        });
+      }
+
+      // Secondary Table (Net Rate Products)
+      if (netRateProducts.length > 0) {
+        y += 20;
+        if (y + rowHeight + 30 > pageHeight - 50) {
+          doc.addPage();
+          y = doc.page.margins.top + 20;
+        }
+
+        doc.fontSize(12).font('Helvetica-Bold').text('NET RATE PRODUCTS', 50, y);
+        y += 20;
+        doc.moveTo(50, y - 5).lineTo(50 + tableWidth, y - 5).stroke();
+        doc.fontSize(10).font('Helvetica-Bold')
+          .text('Sl.N', colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
+          .text('Product', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
+          .text('Qty', colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
+          .text('Rate', colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
+          .text('Disc Rate', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+          .text('Per', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
+          .text('Total', colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
+        doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
+        colX.forEach((x, i) => {
+          doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
+          if (i === colX.length - 1) {
+            doc.moveTo(x + colWidths[i], y - 5).lineTo(x + colWidths[i], y + 15).stroke();
+          }
+        });
+
+        y += rowHeight;
+        netRateProducts.forEach((product, index) => {
+          if (y + rowHeight > pageHeight - 50) {
+            doc.addPage();
+            y = doc.page.margins.top + 20;
+            doc.fontSize(12).font('Helvetica-Bold').text('NET RATE PRODUCTS (Continued)', 50, y - 20);
+            doc.moveTo(50, y - 5).lineTo(50 + tableWidth, y - 5).stroke();
+            doc.fontSize(10).font('Helvetica-Bold')
+              .text('Sl.N', colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
+              .text('Product', colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
+              .text('Qty', colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
+              .text('Rate', colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
+              .text('Disc Rate', colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+              .text('Per', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
+              .text('Total', colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
+            doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
+            colX.forEach((x, i) => {
+              doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
+              if (i === colX.length - 1) {
+                doc.moveTo(x + colWidths[i], y - 5).lineTo(x + colWidths[i], y + 15).stroke();
+              }
+            });
+            y += rowHeight;
+          }
+
+          const price = parseFloat(product.price) || 0;
+          const discRate = price; // No discount for net rate products
+          const productTotal = discRate * (product.quantity || 1);
+
+          let productName = product.productname || 'N/A';
+          if (productName.length > 30) {
+            productName = productName.substring(0, 27) + '...';
+          }
+
+          doc.font('Helvetica')
+            .text(index + 1, colX[0] + 5, y, { width: colWidths[0] - 10, align: 'center' })
+            .text(productName, colX[1] + 5, y, { width: colWidths[1] - 10, align: 'left' })
+            .text(product.quantity || 1, colX[2] + 5, y, { width: colWidths[2] - 10, align: 'center' })
+            .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, y, { width: colWidths[3] - 10, align: 'left' })
+            .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 5, y, { width: colWidths[4] - 10, align: 'left' })
+            .text(product.per || 'N/A', colX[5] + 5, y, { width: colWidths[5] - 10, align: 'center' })
+            .text(`Rs.${productTotal.toFixed(2)}`, colX[6] + 5, y, { width: colWidths[6] - 10, align: 'left' });
+
+          doc.moveTo(50, y + 15).lineTo(50 + tableWidth, y + 15).stroke();
+          colX.forEach((x, i) => {
+            doc.moveTo(x, y - 5).lineTo(x, y + 15).stroke();
+            if (i === colX.length - 1) {
+              doc.moveTo(x + colWidths[i], y - 5).lineTo(x + colWidths[i], y + 15).stroke();
+            }
+          });
+
+          y += rowHeight;
+        });
+      }
+
+      // Handle case with no products
+      if (products.length === 0) {
+        y += 20;
+        doc.fontSize(12).font('Helvetica').text('No products available', 50, y, { align: 'center' });
+        y += 20;
+      }
+
+      // Totals Section
       y += 10;
       if (y + 110 > pageHeight - 50) {
         doc.addPage();
@@ -178,7 +283,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
             reject(new Error(`PDF file at ${pdfPath} is not readable: ${err.message}`));
             return;
           }
-          resolve({ pdfPath, calculatedTotal: total });
+          resolve({ pdfPath, calculatedTotal: grandTotal });
         });
       });
       stream.on('error', (err) => {
@@ -432,16 +537,19 @@ exports.createQuotation = async (req, res) => {
 
     const enhancedProducts = [];
     for (const product of products) {
-      const { id, product_type, quantity, price, discount } = product;
-      if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
-        return res.status(400).json({ message: 'Invalid product entry', quotation_id });
+      const { id, product_type, quantity, price, discount, productname, per } = product;
+      if (!id || !product_type || !productname || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
+        return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)', quotation_id });
 
-      const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-      const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-      if (productCheck.rows.length === 0)
-        return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, quotation_id });
-      const per = productCheck.rows[0].per || '';
-      enhancedProducts.push({ ...product, per });
+      let productPer = per || 'Unit'; // Default to 'Unit' if per is not provided
+      if (product_type.toLowerCase() !== 'custom') {
+        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
+        if (productCheck.rows.length === 0)
+          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, quotation_id });
+        productPer = productCheck.rows[0].per || productPer;
+      }
+      enhancedProducts.push({ ...product, per: productPer });
     }
 
     let pdfPath;
@@ -454,7 +562,7 @@ exports.createQuotation = async (req, res) => {
         { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
       );
       pdfPath = pdfResult.pdfPath;
-      console.log(`PDF generated at: ${pdfPath} for quotation_id: ${quotation_id}`);
+      console.log(`PDF generated`);
     } catch (pdfError) {
       console.error(`Failed: PDF generation failed for quotation_id ${quotation_id}: ${pdfError.message}`);
       return res.status(500).json({ message: 'Failed to generate PDF', error: pdfError.message, quotation_id });
@@ -495,11 +603,57 @@ exports.createQuotation = async (req, res) => {
         pdfPath
       ]);
 
-      console.log(`Quotation created with quotation_id: ${quotation_id}, id: ${result.rows[0].id}`);
+      console.log(`Quotation created`);
 
       await client.query('COMMIT');
 
-      // Return JSON response with quotation_id
+      // Send email to customer if email exists
+      if (customerDetails.email) {
+        try {
+          await sendBookingEmail(
+            customerDetails.email,
+            {
+              quotation_id,
+              customer_type: finalCustomerType,
+              net_rate: parsedNetRate,
+              you_save: parsedYouSave,
+              total: parsedTotal,
+              additional_discount: parsedAdditionalDiscount
+            },
+            customerDetails,
+            pdfPath,
+            enhancedProducts,
+            'quotation',
+            'pending'
+          );
+        } catch (emailError) {
+          console.error(`Failed to send quotation email to ${customerDetails.email} for quotation_id ${quotation_id}: ${emailError.message}`);
+        }
+      }
+
+      // Send email to admin
+      const adminEmail = process.env.ADMIN_EMAIL || 'nivasramasamy27@gmail.com';
+      try {
+        await sendBookingEmail(
+          adminEmail,
+          {
+            quotation_id,
+            customer_type: finalCustomerType,
+            net_rate: parsedNetRate,
+            you_save: parsedYouSave,
+            total: parsedTotal,
+            additional_discount: parsedAdditionalDiscount
+          },
+          customerDetails,
+          pdfPath,
+          enhancedProducts,
+          'quotation',
+          'pending'
+        );
+      } catch (emailError) {
+        console.error(`Failed to send quotation email to ${adminEmail} for quotation_id ${quotation_id}: ${emailError.message}`);
+      }
+
       res.status(200).json({
         message: 'Quotation created successfully',
         quotation_id: result.rows[0].quotation_id,
@@ -580,16 +734,19 @@ exports.updateQuotation = async (req, res) => {
     if (products) {
       enhancedProducts = [];
       for (const product of products) {
-        const { id, product_type, quantity, price, discount } = product;
-        if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
-          return res.status(400).json({ message: 'Invalid product entry', quotation_id });
+        const { id, product_type, quantity, price, discount, productname, per } = product;
+        if (!id || !product_type || !productname || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
+          return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)', quotation_id });
 
-        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-        if (productCheck.rows.length === 0)
-          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, quotation_id });
-        const per = productCheck.rows[0].per || '';
-        enhancedProducts.push({ ...product, per });
+        let productPer = per || 'Unit';
+        if (product_type.toLowerCase() !== 'custom') {
+          const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
+          if (productCheck.rows.length === 0)
+            return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, quotation_id });
+          productPer = productCheck.rows[0].per || productPer;
+        }
+        enhancedProducts.push({ ...product, per: productPer });
       }
     }
 
@@ -884,8 +1041,10 @@ exports.createBooking = async (req, res) => {
 
     if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) 
       return res.status(400).json({ message: 'Invalid or missing Order ID', order_id });
+
     if (!Array.isArray(products) || products.length === 0) 
       return res.status(400).json({ message: 'Products array is required and must not be empty', order_id });
+
     if (!total || isNaN(parseFloat(total)) || parseFloat(total) <= 0) 
       return res.status(400).json({ message: 'Total must be a positive number', order_id });
 
@@ -934,16 +1093,19 @@ exports.createBooking = async (req, res) => {
 
     const enhancedProducts = [];
     for (const product of products) {
-      const { id, product_type, quantity, price, discount } = product;
-      if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
-        return res.status(400).json({ message: 'Invalid product entry', order_id });
+      const { id, product_type, quantity, price, discount, productname, per } = product;
+      if (!id || !product_type || !productname || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
+        return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)', order_id });
 
-      const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-      const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-      if (productCheck.rows.length === 0)
-        return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, order_id });
-      const per = productCheck.rows[0].per || '';
-      enhancedProducts.push({ ...product, per });
+      let productPer = per || 'Unit';
+      if (product_type.toLowerCase() !== 'custom') {
+        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
+        if (productCheck.rows.length === 0)
+          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, order_id });
+        productPer = productCheck.rows[0].per || productPer;
+      }
+      enhancedProducts.push({ ...product, per: productPer });
     }
 
     let pdfPath;
@@ -956,7 +1118,7 @@ exports.createBooking = async (req, res) => {
         { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
       );
       pdfPath = pdfResult.pdfPath;
-      console.log(`PDF generated at: ${pdfPath} for order_id: ${order_id}`);
+      console.log(`PDF generated`);
     } catch (pdfError) {
       console.error(`Failed: PDF generation failed for order_id ${order_id}: ${pdfError.message}`);
       return res.status(500).json({ message: 'Failed to generate PDF', error: pdfError.message, order_id });
@@ -966,16 +1128,16 @@ exports.createBooking = async (req, res) => {
     try {
       await client.query('BEGIN');
 
-      const existingBooking = await pool.query('SELECT id FROM public.bookings WHERE order_id = $1', [order_id]);
+      const existingBooking = await client.query('SELECT id FROM public.bookings WHERE order_id = $1', [order_id]);
       if (existingBooking.rows.length > 0) {
         await client.query('ROLLBACK');
         return res.status(400).json({ message: 'Order ID already exists', order_id });
       }
 
-      const bookingResult = await client.query(`
+      const result = await client.query(`
         INSERT INTO public.bookings 
-        (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, pdf)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18)
         RETURNING id, created_at, customer_type, pdf, order_id
       `, [
         customer_id || null,
@@ -998,7 +1160,7 @@ exports.createBooking = async (req, res) => {
         pdfPath
       ]);
 
-      console.log(`Booking created with order_id: ${order_id}, id: ${bookingResult.rows[0].id}`);
+      console.log(`Booking created`);
 
       if (quotation_id) {
         const quotationCheck = await client.query(
@@ -1018,17 +1180,63 @@ exports.createBooking = async (req, res) => {
 
       await client.query('COMMIT');
 
-      // Return JSON response with order_id
+      // Send email to customer if email exists
+      if (customerDetails.email) {
+        try {
+          await sendBookingEmail(
+            customerDetails.email,
+            {
+              order_id,
+              customer_type: finalCustomerType,
+              net_rate: parsedNetRate,
+              you_save: parsedYouSave,
+              total: parsedTotal,
+              additional_discount: parsedAdditionalDiscount
+            },
+            customerDetails,
+            pdfPath,
+            enhancedProducts,
+            'invoice',
+            'booked'
+          );
+        } catch (emailError) {
+          console.error(`Failed to send booking email to ${customerDetails.email} for order_id ${order_id}: ${emailError.message}`);
+        }
+      }
+
+      // Send email to admin
+      const adminEmail = process.env.ADMIN_EMAIL || 'nivasramasamy27@gmail.com';
+      try {
+        await sendBookingEmail(
+          adminEmail,
+          {
+            order_id,
+            customer_type: finalCustomerType,
+            net_rate: parsedNetRate,
+            you_save: parsedYouSave,
+            total: parsedTotal,
+            additional_discount: parsedAdditionalDiscount
+          },
+          customerDetails,
+          pdfPath,
+          enhancedProducts,
+          'invoice',
+          'booked'
+        );
+      } catch (emailError) {
+        console.error(`Failed to send booking email to ${adminEmail} for order_id ${order_id}: ${emailError.message}`);
+      }
+
       res.status(200).json({
         message: 'Booking created successfully',
-        order_id: bookingResult.rows[0].order_id,
+        order_id: result.rows[0].order_id,
         pdf_path: pdfPath
       });
     } catch (dbError) {
       await client.query('ROLLBACK');
       throw dbError;
     } finally {
-      if (client && !res.headersSent) client.release();
+      if (client) client.release();
     }
   } catch (err) {
     if (client) {
