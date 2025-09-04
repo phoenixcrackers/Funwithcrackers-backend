@@ -99,8 +99,7 @@ exports.getAllBookings = async (req, res) => {
   try {
     const { status, customerType } = req.query;
     let query = `
-      SELECT id, order_id, customer_name, district, state, status, customer_type, total, payment_method, transaction_id
-      FROM public.bookings
+      SELECT * FROM public.bookings
     `;
     const conditions = [];
     const params = [];
