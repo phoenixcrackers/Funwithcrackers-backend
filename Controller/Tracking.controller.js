@@ -131,13 +131,14 @@ exports.updateBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, payment_method, transaction_id, amount_paid, transportDetails } = req.body;
+    console.log('Received Payload:', { status, payment_method, transaction_id, amount_paid });
     const validStatuses = ['booked', 'paid', 'packed', 'dispatched', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
-    if (status === 'paid' && !amount_paid) {
-      return res.status(400).json({ message: 'Amount paid is required' });
+    if (status === 'paid' && (amount_paid === undefined || amount_paid === null || isNaN(amount_paid) || amount_paid <= 0)) {
+      return res.status(400).json({ message: 'Valid amount paid is required' });
     }
 
     if (status === 'paid' && payment_method === 'bank' && !transaction_id) {
@@ -222,13 +223,14 @@ exports.updateFilterBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, payment_method, transaction_id, amount_paid, transportDetails } = req.body;
+    console.log('Received Payload:', { status, payment_method, transaction_id, amount_paid });
     const validStatuses = ['booked', 'paid', 'packed', 'dispatched', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
-    if (status === 'paid' && !amount_paid) {
-      return res.status(400).json({ message: 'Amount paid is required' });
+    if (status === 'paid' && (amount_paid === undefined || amount_paid === null || isNaN(amount_paid) || amount_paid <= 0)) {
+      return res.status(400).json({ message: 'Valid amount paid is required' });
     }
 
     if (status === 'paid' && payment_method === 'bank' && !transaction_id) {
