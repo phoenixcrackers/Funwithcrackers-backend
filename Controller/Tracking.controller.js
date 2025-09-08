@@ -26,7 +26,8 @@ const createTransportTable = `
 const alterBookingsTable = `
   ALTER TABLE bookings
   ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20),
-  ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(100)
+  ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS amount_paid NUMERIC
 `;
 
 pool.query(createTransportTable).catch((err) => console.error('Error creating transport table:', err));
@@ -129,10 +130,14 @@ exports.getAllBookings = async (req, res) => {
 exports.updateBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, payment_method, transaction_id, transportDetails } = req.body;
+    const { status, payment_method, transaction_id, amount_paid, transportDetails } = req.body;
     const validStatuses = ['booked', 'paid', 'packed', 'dispatched', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
+    }
+
+    if (status === 'paid' && !amount_paid) {
+      return res.status(400).json({ message: 'Amount paid is required' });
     }
 
     if (status === 'paid' && payment_method === 'bank' && !transaction_id) {
@@ -143,11 +148,11 @@ exports.updateBookingStatus = async (req, res) => {
 
     let query = `
       UPDATE public.bookings
-      SET status = $1, payment_method = $3, transaction_id = $4
+      SET status = $1, payment_method = $3, transaction_id = $4, amount_paid = $5
       WHERE id = $2
-      RETURNING id, order_id, status, mobile_number, payment_method, transaction_id
+      RETURNING id, order_id, status, mobile_number, payment_method, transaction_id, amount_paid
     `;
-    const params = [status, id, payment_method || null, transaction_id || null];
+    const params = [status, id, payment_method || null, transaction_id || null, amount_paid || null];
 
     const result = await pool.query(query, params);
 
@@ -189,7 +194,7 @@ exports.getFilteredBookings = async (req, res) => {
     const { status } = req.query;
     const allowedStatuses = ['paid', 'packed', 'dispatched', 'delivered'];
     let query = `
-      SELECT b.id, b.order_id, b.customer_name, b.district, b.state, b.status, b.products, b.address, b.created_at, b.mobile_number, b.payment_method, b.transaction_id, t.transport_name, t.lr_number, t.transport_contact
+      SELECT b.id, b.order_id, b.customer_name, b.district, b.state, b.status, b.products, b.address, b.created_at, b.mobile_number, b.payment_method, b.transaction_id, b.amount_paid, t.transport_name, t.lr_number, t.transport_contact
       FROM public.bookings b
       LEFT JOIN transport_details t ON b.order_id = t.order_id
       WHERE b.status = ANY($1)
@@ -216,10 +221,14 @@ exports.getFilteredBookings = async (req, res) => {
 exports.updateFilterBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, payment_method, transaction_id, transportDetails } = req.body;
+    const { status, payment_method, transaction_id, amount_paid, transportDetails } = req.body;
     const validStatuses = ['booked', 'paid', 'packed', 'dispatched', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
+    }
+
+    if (status === 'paid' && !amount_paid) {
+      return res.status(400).json({ message: 'Amount paid is required' });
     }
 
     if (status === 'paid' && payment_method === 'bank' && !transaction_id) {
@@ -230,11 +239,11 @@ exports.updateFilterBookingStatus = async (req, res) => {
 
     let query = `
       UPDATE public.bookings
-      SET status = $1, payment_method = $3, transaction_id = $4
+      SET status = $1, payment_method = $3, transaction_id = $4, amount_paid = $5
       WHERE id = $2
-      RETURNING id, order_id, status, mobile_number, payment_method, transaction_id
+      RETURNING id, order_id, status, mobile_number, payment_method, transaction_id, amount_paid
     `;
-    const params = [status, id, payment_method || null, transaction_id || null];
+    const params = [status, id, payment_method || null, transaction_id || null, amount_paid || null];
 
     const result = await pool.query(query, params);
 
