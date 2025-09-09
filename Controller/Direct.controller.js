@@ -1223,50 +1223,88 @@ exports.getInvoice = async (req, res) => {
   console.log(`getInvoice called with order_id: ${order_id}`);
 
   if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) {
-    console.error(`failed: Invalid order_id received: ${order_id}`);
+    console.error(`Failed: Invalid order_id received: ${order_id}`);
     return res.status(400).json({ message: 'Invalid or missing order_id', received_order_id: order_id });
   }
 
   try {
-    const result = await pool.query('SELECT pdf FROM public.bookings WHERE order_id = $1', [order_id]);
+    const result = await pool.query(
+      'SELECT pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status FROM public.bookings WHERE order_id = $1',
+      [order_id]
+    );
     if (result.rows.length === 0) {
-      console.error(`failed: No booking found for order_id: ${order_id}`);
+      console.error(`Failed: No booking found for order_id: ${order_id}`);
       return res.status(404).json({ message: 'Booking not found', order_id });
     }
 
-    const pdfPath = result.rows[0].pdf;
-    if (!fs.existsSync(pdfPath)) {
-      console.error(`failed: PDF file not found at ${pdfPath} for order_id: ${order_id}`);
-      return res.status(404).json({ message: 'PDF file not found', order_id });
+    const { pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status } = result.rows[0];
+    let pdfPath = pdf;
+    let agent_name = null;
+
+    if (customer_type === 'Customer of Selected Agent' && customer_id) {
+      const customerCheck = await pool.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
+      if (customerCheck.rows.length > 0 && customerCheck.rows[0].agent_id) {
+        const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerCheck.rows[0].agent_id]);
+        if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
+      }
     }
 
-    fs.access(pdfPath, fs.constants.R_OK, async (err) => {
+    if (!fs.existsSync(pdfPath)) {
+      console.log(`PDF not found at ${pdfPath}, regenerating for order_id: ${order_id}`);
+      let parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+      let enhancedProducts = [];
+      for (const p of parsedProducts) {
+        if (!p.per) {
+          const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
+          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+          const per = productCheck.rows[0]?.per || 'Unit';
+          enhancedProducts.push({ ...p, per });
+        } else {
+          enhancedProducts.push(p);
+        }
+      }
+      const pdfResult = await generatePDF(
+        'invoice',
+        { order_id, customer_type, total: parseFloat(total || 0), agent_name },
+        { customer_name, address, mobile_number, email, district, state },
+        enhancedProducts,
+        { 
+          net_rate: parseFloat(net_rate || 0), 
+          you_save: parseFloat(you_save || 0), 
+          total: parseFloat(total || 0), 
+          promo_discount: parseFloat(promo_discount || 0),
+          additional_discount: parseFloat(additional_discount || 0)
+        }
+      );
+      pdfPath = pdfResult.pdfPath;
+      console.log(`PDF regenerated at: ${pdfPath} for order_id: ${order_id}`);
+
+      await pool.query(
+        'UPDATE public.bookings SET pdf = $1 WHERE order_id = $2',
+        [pdfPath, order_id]
+      );
+    }
+
+    fs.access(pdfPath, fs.constants.R_OK, (err) => {
       if (err) {
-        console.error(`failed: Cannot read PDF file at ${pdfPath} for order_id ${order_id}: ${err.message}`);
+        console.error(`Failed: Cannot read PDF file at ${pdfPath} for order_id ${order_id}: ${err.message}`);
         return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, order_id });
       }
-
-      try {
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=${path.basename(pdfPath)}`);
-        const readStream = fs.createReadStream(pdfPath);
-        readStream.on('error', (streamErr) => {
-          console.error(`failed: Failed to stream PDF for order_id ${order_id}: ${streamErr.message}`);
-          if (!res.headersSent) {
-            res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, order_id });
-          }
-        });
-        readStream.pipe(res);
-        console.log(`PDF streaming initiated for order_id: ${order_id}`);
-      } catch (streamErr) {
-        console.error(`failed: Failed to stream PDF for order_id ${order_id}: ${streamErr.message}`);
+      const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
+      const readStream = fs.createReadStream(pdfPath);
+      readStream.on('error', (streamErr) => {
+        console.error(`Failed: Failed to stream PDF for order_id ${order_id}: ${streamErr.message}`);
         if (!res.headersSent) {
           res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, order_id });
         }
-      }
+      });
+      readStream.pipe(res);
+      console.log(`PDF streaming initiated for order_id: ${order_id}`);
     });
   } catch (err) {
-    console.error(`failed: Failed to fetch invoice for order_id ${order_id}: ${err.message}`);
+    console.error(`Failed: Failed to fetch invoice for order_id ${order_id}: ${err.message}`);
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message, order_id });
   }
 };
