@@ -14,11 +14,11 @@ exports.getSalesAnalysis = async (req, res) => {
     const validateProducts = await pool.query(`
       SELECT COUNT(*) AS invalid_count
       FROM public.bookings
-      WHERE status = 'booked' AND (products::jsonb IS NULL OR jsonb_typeof(products::jsonb) != 'array')
+      WHERE status IN ('booked', 'paid', 'delivered') AND (products::jsonb IS NULL OR jsonb_typeof(products::jsonb) != 'array')
       UNION ALL
       SELECT COUNT(*) AS invalid_count
       FROM public.fwcquotations
-      WHERE status = 'booked' AND (products::jsonb IS NULL OR jsonb_typeof(products::jsonb) != 'array')
+      WHERE status IN ('booked', 'pending') AND (products::jsonb IS NULL OR jsonb_typeof(products::jsonb) != 'array')
     `);
     if (validateProducts.rows.some(row => row.invalid_count > 0)) {
       console.warn('Invalid products JSONB found:', validateProducts.rows);
@@ -33,7 +33,7 @@ exports.getSalesAnalysis = async (req, res) => {
         COALESCE((p.product->>'discount')::numeric, 0) AS discount
       FROM public.bookings b
       CROSS JOIN LATERAL jsonb_array_elements(b.products::jsonb) AS p(product)
-      WHERE LOWER(b.status) = 'booked'
+      WHERE LOWER(b.status) IN ('booked', 'paid', 'delivered')
       UNION ALL
       SELECT 
         p.product->>'productname' AS productname,
@@ -42,7 +42,7 @@ exports.getSalesAnalysis = async (req, res) => {
         COALESCE((p.product->>'discount')::numeric, 0) AS discount
       FROM public.fwcquotations q
       CROSS JOIN LATERAL jsonb_array_elements(q.products::jsonb) AS p(product)
-      WHERE LOWER(q.status) = 'booked'
+      WHERE LOWER(q.status) IN ('booked', 'pending')
     `);
     console.log('Products rows:', products.rows.length);
 
@@ -75,12 +75,12 @@ exports.getSalesAnalysis = async (req, res) => {
     const cities = await pool.query(`
       SELECT district, COUNT(*) AS count, SUM(COALESCE(total::numeric, 0)) AS revenue
       FROM public.bookings
-      WHERE LOWER(status) = 'booked'
+      WHERE LOWER(status) IN ('booked', 'paid', 'delivered')
       GROUP BY district
       UNION ALL
       SELECT district, COUNT(*) AS count, SUM(COALESCE(total::numeric, 0)) AS revenue
       FROM public.fwcquotations
-      WHERE LOWER(status) = 'booked'
+      WHERE LOWER(status) IN ('booked', 'pending')
       GROUP BY district
     `);
     console.log('Cities rows:', cities.rows.length);
@@ -102,64 +102,100 @@ exports.getSalesAnalysis = async (req, res) => {
     }));
 
     // Fetch historical trends
-    // Fetch historical trends from bookings and quotations
-const historical = await pool.query(`
-  SELECT 
-    created_at,
-    COALESCE(net_rate::numeric, 0) - COALESCE(you_save::numeric, 0) AS net_revenue
-  FROM public.bookings
-  WHERE LOWER(status) = 'booked'
-  UNION ALL
-  SELECT 
-    created_at,
-    COALESCE(net_rate::numeric, 0) - COALESCE(you_save::numeric, 0) AS net_revenue
-  FROM public.fwcquotations
-  WHERE LOWER(status) = 'booked'
-`);
-console.log('Historical rows:', historical.rows.length);
-
-const monthlyTrends = historical.rows.reduce((acc, row) => {
-  if (!row.created_at) {
-    console.warn('Skipping row with invalid created_at:', row);
-    return acc;
-  }
-  const date = new Date(row.created_at);
-  const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-  if (!acc[monthYear]) {
-    acc[monthYear] = { volume: 0, revenue: 0 };
-  }
-  acc[monthYear].volume += 1;
-  acc[monthYear].revenue += parseFloat(row.net_revenue) || 0;
-  return acc;
-}, {});
-
-const trendData = Object.entries(monthlyTrends).map(([month, data]) => ({
-  month,
-  volume: data.volume,
-  revenue: data.revenue
-})).sort((a, b) => a.month.localeCompare(b.month));
-
-    // Fetch profitability metrics (include fwcquotations)
-    const profitability = await pool.query(`
+    const historical = await pool.query(`
       SELECT 
-        SUM(COALESCE(net_rate::numeric, 0)) AS total_revenue,
-        SUM(COALESCE(you_save::numeric, 0)) AS total_discounts
+        created_at,
+        COALESCE(total::numeric, 0) AS total_revenue,
+        COALESCE(amount_paid::numeric, 0) AS actual_revenue,
+        COALESCE((
+          SELECT SUM((p->>'quantity')::integer * ((p->>'price')::numeric * (p->>'discount')::numeric / 100))
+          FROM jsonb_array_elements(products) AS p
+        ), 0) AS total_discount
       FROM public.bookings
-      WHERE LOWER(status) = 'booked'
+      WHERE LOWER(status) IN ('booked', 'paid', 'delivered')
       UNION ALL
       SELECT 
-        SUM(COALESCE(net_rate::numeric, 0)) AS total_revenue,
-        SUM(COALESCE(you_save::numeric, 0)) AS total_discounts
+        created_at,
+        COALESCE(total::numeric, 0) AS total_revenue,
+        0 AS actual_revenue,
+        COALESCE((
+          SELECT SUM((p->>'quantity')::integer * ((p->>'price')::numeric * (p->>'discount')::numeric / 100))
+          FROM jsonb_array_elements(products) AS p
+        ), 0) AS total_discount
       FROM public.fwcquotations
-      WHERE LOWER(status) = 'booked'
+      WHERE LOWER(status) IN ('booked', 'pending')
+    `);
+    console.log('Historical rows:', historical.rows.length);
+
+    const monthlyTrends = historical.rows.reduce((acc, row) => {
+      if (!row.created_at) {
+        console.warn('Skipping row with invalid created_at:', row);
+        return acc;
+      }
+      const date = new Date(row.created_at);
+      const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (!acc[monthYear]) {
+        acc[monthYear] = { volume: 0, total_revenue: 0, actual_revenue: 0, total_discount: 0 };
+      }
+      acc[monthYear].volume += 1;
+      acc[monthYear].total_revenue += parseFloat(row.total_revenue) || 0;
+      acc[monthYear].actual_revenue += parseFloat(row.actual_revenue) || 0;
+      acc[monthYear].total_discount += parseFloat(row.total_discount) || 0;
+      return acc;
+    }, {});
+
+    const trendData = Object.entries(monthlyTrends).map(([month, data]) => ({
+      month,
+      volume: data.volume,
+      total_revenue: data.total_revenue,
+      actual_revenue: data.actual_revenue,
+      total_discount: data.total_discount
+    })).sort((a, b) => a.month.localeCompare(b.month));
+
+    // Fetch profitability metrics using CTE
+    const profitability = await pool.query(`
+      WITH booking_discounts AS (
+        SELECT 
+          b.id,
+          SUM((p->>'quantity')::integer * ((p->>'price')::numeric * (p->>'discount')::numeric / 100)) AS total_discount
+        FROM public.bookings b
+        CROSS JOIN LATERAL jsonb_array_elements(b.products) AS p
+        WHERE LOWER(b.status) IN ('paid', 'delivered')
+        GROUP BY b.id
+      ),
+      quotation_discounts AS (
+        SELECT 
+          q.id,
+          SUM((p->>'quantity')::integer * ((p->>'price')::numeric * (p->>'discount')::numeric / 100)) AS total_discount
+        FROM public.fwcquotations q
+        CROSS JOIN LATERAL jsonb_array_elements(q.products) AS p
+        WHERE LOWER(q.status) IN ('booked', 'pending')
+        GROUP BY q.id
+      )
+      SELECT 
+        SUM(COALESCE(b.total::numeric, 0)) AS total_revenue,
+        SUM(COALESCE(b.amount_paid::numeric, 0)) AS actual_revenue,
+        COALESCE(SUM(bd.total_discount), 0) AS total_discount
+      FROM public.bookings b
+      LEFT JOIN booking_discounts bd ON b.id = bd.id
+      WHERE LOWER(b.status) IN ('paid', 'delivered')
+      UNION ALL
+      SELECT 
+        SUM(COALESCE(q.total::numeric, 0)) AS total_revenue,
+        0 AS actual_revenue,
+        COALESCE(SUM(qd.total_discount), 0) AS total_discount
+      FROM public.fwcquotations q
+      LEFT JOIN quotation_discounts qd ON q.id = qd.id
+      WHERE LOWER(q.status) IN ('booked', 'pending')
     `);
     console.log('Profitability rows:', profitability.rows.length);
 
     const profitData = profitability.rows.reduce((acc, row) => {
       acc.total_revenue += parseFloat(row.total_revenue) || 0;
-      acc.total_discounts += parseFloat(row.total_discounts) || 0;
+      acc.actual_revenue += parseFloat(row.actual_revenue) || 0;
+      acc.total_discount += parseFloat(row.total_discount) || 0;
       return acc;
-    }, { total_revenue: 0, total_discounts: 0 });
+    }, { total_revenue: 0, actual_revenue: 0, total_discount: 0 });
 
     // Fetch quotation conversion rates
     const quotations = await pool.query(`
@@ -181,7 +217,7 @@ const trendData = Object.entries(monthlyTrends).map(([month, data]) => ({
         COUNT(*) AS count, 
         SUM(COALESCE(total::numeric, 0)) AS revenue
       FROM public.bookings
-      WHERE LOWER(status) = 'booked'
+      WHERE LOWER(status) IN ('booked', 'paid', 'delivered')
       GROUP BY customer_type
     `);
     console.log('Customer types rows:', customerTypes.rows.length);
@@ -225,8 +261,9 @@ const trendData = Object.entries(monthlyTrends).map(([month, data]) => ({
       trends: trendData,
       profitability: {
         total_revenue: profitData.total_revenue,
-        total_discounts: profitData.total_discounts,
-        estimated_profit: profitData.total_revenue - profitData.total_discounts
+        actual_revenue: profitData.actual_revenue,
+        total_discount: profitData.total_discount,
+        estimated_profit: profitData.actual_revenue - profitData.total_discount
       },
       quotations: quotationSummary,
       customer_types: customerTypeData,

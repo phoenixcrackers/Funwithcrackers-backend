@@ -132,29 +132,53 @@ exports.updateBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, payment_method, transaction_id, amount_paid, transportDetails } = req.body;
-    console.log('Received Payload:', { status, payment_method, transaction_id, amount_paid });
+    console.log('Received Payload:', { status, payment_method, transaction_id, amount_paid, transportDetails });
+
     const validStatuses = ['booked', 'paid', 'packed', 'dispatched', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
-    if (status === 'paid' && (amount_paid === undefined || amount_paid === null || isNaN(amount_paid) || amount_paid <= 0)) {
-      return res.status(400).json({ message: 'Valid amount paid is required' });
-    }
-
-    if (status === 'paid' && payment_method === 'bank' && !transaction_id) {
-      return res.status(400).json({ message: 'Transaction ID is required for bank payments' });
+    if (status === 'paid') {
+      if (amount_paid === undefined || amount_paid === null || isNaN(amount_paid) || amount_paid <= 0) {
+        return res.status(400).json({ message: 'Valid amount paid is required for paid status' });
+      }
+      if (!payment_method) {
+        return res.status(400).json({ message: 'Payment method is required for paid status' });
+      }
+      if (payment_method === 'bank' && (!transaction_id || transaction_id.trim() === '')) {
+        return res.status(400).json({ message: 'Transaction ID is required for bank payments' });
+      }
     }
 
     await pool.query('BEGIN');
 
+    // Build the update query dynamically
     let query = `
       UPDATE public.bookings
-      SET status = $1, payment_method = $3, transaction_id = $4, amount_paid = $5
-      WHERE id = $2
+      SET status = $1
+    `;
+    const params = [status];
+    let paramIndex = 2;
+
+    // Only update payment fields if they are explicitly provided
+    if (status === 'paid') {
+      query += `, payment_method = $${paramIndex}`;
+      params.push(payment_method);
+      paramIndex++;
+      query += `, transaction_id = $${paramIndex}`;
+      params.push(transaction_id || null);
+      paramIndex++;
+      query += `, amount_paid = $${paramIndex}`;
+      params.push(amount_paid);
+      paramIndex++;
+    }
+
+    query += `
+      WHERE id = $${paramIndex}
       RETURNING id, order_id, status, mobile_number, payment_method, transaction_id, amount_paid
     `;
-    const params = [status, id, payment_method || null, transaction_id || null, amount_paid || null];
+    params.push(id);
 
     const result = await pool.query(query, params);
 
@@ -191,6 +215,7 @@ exports.updateBookingStatus = async (req, res) => {
   }
 };
 
+
 exports.getFilteredBookings = async (req, res) => {
   try {
     const { status } = req.query;
@@ -220,33 +245,91 @@ exports.getFilteredBookings = async (req, res) => {
   }
 };
 
+exports.getreportBookings = async (req, res) => {
+  try {
+    const { status } = req.query;
+    const allowedStatuses = ['delivered'];
+    let query = `
+      SELECT 
+        b.id, 
+        b.order_id, 
+        b.customer_name, 
+        b.district, 
+        b.state, 
+        b.status, 
+        b.products, 
+        b.address, 
+        b.created_at, 
+        b.mobile_number, 
+        b.payment_method, 
+        b.transaction_id, 
+        b.amount_paid,
+        b.total,
+        t.transport_name, 
+        t.lr_number, 
+        t.transport_contact
+      FROM public.bookings b
+      LEFT JOIN transport_details t ON b.order_id = t.order_id
+      WHERE b.status = ANY($1)
+    `;
+    const params = [allowedStatuses];
+    if (status && allowedStatuses.includes(status)) {
+      query += ` AND b.status = $2`;
+      params.push(status);
+    }
+    const result = await pool.query(query, params);
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Error fetching filtered bookings:', err);
+    res.status(500).json({ message: 'Failed to fetch filtered bookings' });
+  }
+};
+
 exports.updateFilterBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, payment_method, transaction_id, amount_paid, transportDetails } = req.body;
     console.log('Received Payload:', { status, payment_method, transaction_id, amount_paid });
+
     const validStatuses = ['booked', 'paid', 'packed', 'dispatched', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
-    if (status === 'paid' && (amount_paid === undefined || amount_paid === null || isNaN(amount_paid) || amount_paid <= 0)) {
-      return res.status(400).json({ message: 'Valid amount paid is required' });
-    }
-
-    if (status === 'paid' && payment_method === 'bank' && !transaction_id) {
-      return res.status(400).json({ message: 'Transaction ID is required for bank payments' });
+    if (status === 'paid') {
+      if (amount_paid === undefined || amount_paid === null || isNaN(amount_paid) || amount_paid <= 0) {
+        return res.status(400).json({ message: 'Valid amount paid is required' });
+      }
+      if (!payment_method) {
+        return res.status(400).json({ message: 'Payment method is required for paid status' });
+      }
+      if (payment_method === 'bank' && (!transaction_id || transaction_id.trim() === '')) {
+        return res.status(400).json({ message: 'Transaction ID is required for bank payments' });
+      }
     }
 
     await pool.query('BEGIN');
 
+    // Build the update query dynamically
     let query = `
       UPDATE public.bookings
-      SET status = $1, payment_method = $3, transaction_id = $4, amount_paid = $5
-      WHERE id = $2
+      SET status = $1
+    `;
+    const params = [status];
+    let paramIndex = 2;
+
+    // Only update payment fields if status is 'paid'
+    if (status === 'paid') {
+      query += `, payment_method = $${paramIndex}, transaction_id = $${paramIndex + 1}, amount_paid = $${paramIndex + 2}`;
+      params.push(payment_method || null, transaction_id || null, amount_paid || null);
+      paramIndex += 3;
+    }
+
+    query += `
+      WHERE id = $${paramIndex}
       RETURNING id, order_id, status, mobile_number, payment_method, transaction_id, amount_paid
     `;
-    const params = [status, id, payment_method || null, transaction_id || null, amount_paid || null];
+    params.push(id);
 
     const result = await pool.query(query, params);
 
