@@ -6,5 +6,6 @@ router.get('/bookings', trackingController.getAllBookings);
 router.put('/bookings/:id/status', trackingController.updateBookingStatus);
 router.get('/filtered-bookings', trackingController.getFilteredBookings);
 router.put('/fbookings/:id/status', trackingController.updateFilterBookingStatus);
+router.delete('/bookings/:order_id', trackingController.deleteBooking);
 
 module.exports = router;

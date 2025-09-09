@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
 const axios = require('axios');
+const fs = require('fs');
 
 const pool = new Pool({
   user: process.env.PGUSER,
@@ -278,6 +279,83 @@ exports.updateFilterBookingStatus = async (req, res) => {
     await pool.query('ROLLBACK');
     console.error('Error updating booking status:', err);
     res.status(500).json({ message: 'Failed to update booking status', error: err.message });
+  }
+};
+
+exports.deleteBooking = async (req, res) => {
+  let client;
+  try {
+    const { order_id } = req.params;
+    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) 
+      return res.status(400).json({ message: 'Invalid or missing Order ID', order_id });
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    const bookingCheck = await client.query(
+      'SELECT quotation_id, pdf FROM public.bookings WHERE order_id = $1',
+      [order_id]
+    );
+    if (bookingCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'Booking not found', order_id });
+    }
+
+    const { quotation_id, pdf } = bookingCheck.rows[0];
+
+    // Delete the booking
+    await client.query(
+      'DELETE FROM public.bookings WHERE order_id = $1',
+      [order_id]
+    );
+
+    // Delete associated quotation if it exists
+    if (quotation_id) {
+      const quotationCheck = await client.query(
+        'SELECT pdf FROM public.fwcquotations WHERE quotation_id = $1',
+        [quotation_id]
+      );
+      if (quotationCheck.rows.length > 0) {
+        const quotationPdf = quotationCheck.rows[0].pdf;
+        await client.query(
+          'DELETE FROM public.fwcquotations WHERE quotation_id = $1',
+          [quotation_id]
+        );
+        // Delete quotation PDF file if it exists
+        if (quotationPdf && fs.existsSync(quotationPdf)) {
+          try {
+            fs.unlinkSync(quotationPdf);
+            console.log(`Deleted quotation PDF: ${quotationPdf}`);
+          } catch (err) {
+            console.error(`Failed to delete quotation PDF ${quotationPdf}: ${err.message}`);
+            // Continue execution even if PDF deletion fails
+          }
+        }
+      }
+    }
+
+    // Delete booking PDF file if it exists
+    if (pdf && fs.existsSync(pdf)) {
+      try {
+        fs.unlinkSync(pdf);
+        console.log(`Deleted booking PDF: ${pdf}`);
+      } catch (err) {
+        console.error(`Failed to delete booking PDF ${pdf}: ${err.message}`);
+        // Continue execution even if PDF deletion fails
+      }
+    }
+
+    await client.query('COMMIT');
+    res.status(200).json({ message: 'Booking and associated quotation deleted successfully', order_id });
+  } catch (err) {
+    if (client) {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+    console.error(`Failed to delete booking for order_id ${req.params.order_id}: ${err.message}`);
+    res.status(500).json({ message: 'Failed to delete booking', error: err.message, order_id: req.params.order_id });
+  } finally {
+    if (client) client.release();
   }
 };
 
