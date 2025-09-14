@@ -366,7 +366,7 @@ exports.getAproductsByType = async (req, res) => {
     for (const productType of productTypes) {
       const tableName = productType.toLowerCase().replace(/\s+/g, '_');
       const query = `
-        SELECT id, serial_number, productname, dprice, per, discount, image, status, $1 AS product_type
+        SELECT id, serial_number, productname, dprice, price, per, discount, image, status, $1 AS product_type
         FROM public.${tableName}
       `;
       const result = await pool.query(query, [productType]);
