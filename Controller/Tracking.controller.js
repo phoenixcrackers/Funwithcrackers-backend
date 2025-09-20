@@ -248,7 +248,7 @@ exports.getFilteredBookings = async (req, res) => {
 exports.getreportBookings = async (req, res) => {
   try {
     const { status } = req.query;
-    const allowedStatuses = ['delivered'];
+    const allowedStatuses = ['dispatched','delivered'];
     let query = `
       SELECT 
         b.id, 
