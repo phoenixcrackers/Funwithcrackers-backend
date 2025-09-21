@@ -44,9 +44,27 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         addressLine2 = addressLine1.slice(splitIndex + 1);
         addressLine1 = addressLine1.slice(0, splitIndex);
       }
+      let formattedDate = 'N/A';
+      if (customerDetails.created_at) {
+        try {
+          // Handle both Date objects and strings
+          const date = customerDetails.created_at instanceof Date 
+            ? customerDetails.created_at 
+            : new Date(customerDetails.created_at);
+          if (!isNaN(date.getTime())) {
+            formattedDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          } else {
+            console.warn(`generatePDF: Invalid date format for created_at: ${customerDetails.created_at}`);
+          }
+        } catch (err) {
+          console.error(`generatePDF: Error parsing created_at: ${err.message}`);
+        }
+      } else {
+        console.warn('generatePDF: created_at is undefined or null');
+      }
       doc.fontSize(12).font('Helvetica')
         .text(`${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${data.quotation_id || data.order_id}`, 300, 80, { align: 'right' })
-        .text(`Date: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}`, 300, 95, { align: 'right' })
+        .text(`Date: ${formattedDate}`, 300, 95, { align: 'right' })
         .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 300, 110, { align: 'right' })
         .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 300, 125, { align: 'right' })
         .text(`Address: ${addressLine1}`, 300, 140, { align: 'right' })
@@ -1229,7 +1247,7 @@ exports.getInvoice = async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status FROM public.bookings WHERE order_id = $1',
+      'SELECT pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status, created_at FROM public.bookings WHERE order_id = $1',
       [order_id]
     );
     if (result.rows.length === 0) {
@@ -1237,7 +1255,9 @@ exports.getInvoice = async (req, res) => {
       return res.status(404).json({ message: 'Booking not found', order_id });
     }
 
-    const { pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status } = result.rows[0];
+    const { pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status, created_at } = result.rows[0];
+    console.log(`getInvoice: Fetched created_at: ${created_at}`);
+
     let pdfPath = pdf;
     let agent_name = null;
 
@@ -1249,41 +1269,40 @@ exports.getInvoice = async (req, res) => {
       }
     }
 
-    if (!fs.existsSync(pdfPath)) {
-      console.log(`PDF not found at ${pdfPath}, regenerating for order_id: ${order_id}`);
-      let parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
-      let enhancedProducts = [];
-      for (const p of parsedProducts) {
-        if (!p.per) {
-          const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
-          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
-          const per = productCheck.rows[0]?.per || 'Unit';
-          enhancedProducts.push({ ...p, per });
-        } else {
-          enhancedProducts.push(p);
-        }
+    // Force PDF regeneration for testing
+    console.log(`Forcing PDF regeneration for order_id: ${order_id}`);
+    let parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+    let enhancedProducts = [];
+    for (const p of parsedProducts) {
+      if (!p.per) {
+        const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
+        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+        const per = productCheck.rows[0]?.per || 'Unit';
+        enhancedProducts.push({ ...p, per });
+      } else {
+        enhancedProducts.push(p);
       }
-      const pdfResult = await generatePDF(
-        'invoice',
-        { order_id, customer_type, total: parseFloat(total || 0), agent_name },
-        { customer_name, address, mobile_number, email, district, state },
-        enhancedProducts,
-        { 
-          net_rate: parseFloat(net_rate || 0), 
-          you_save: parseFloat(you_save || 0), 
-          total: parseFloat(total || 0), 
-          promo_discount: parseFloat(promo_discount || 0),
-          additional_discount: parseFloat(additional_discount || 0)
-        }
-      );
-      pdfPath = pdfResult.pdfPath;
-      console.log(`PDF regenerated at: ${pdfPath} for order_id: ${order_id}`);
-
-      await pool.query(
-        'UPDATE public.bookings SET pdf = $1 WHERE order_id = $2',
-        [pdfPath, order_id]
-      );
     }
+    const pdfResult = await generatePDF(
+      'invoice',
+      { order_id, customer_type, total: parseFloat(total || 0), agent_name },
+      { customer_name, address, mobile_number, email, district, state, created_at: created_at.toISOString() }, // Convert to ISO string
+      enhancedProducts,
+      { 
+        net_rate: parseFloat(net_rate || 0), 
+        you_save: parseFloat(you_save || 0), 
+        total: parseFloat(total || 0), 
+        promo_discount: parseFloat(promo_discount || 0),
+        additional_discount: parseFloat(additional_discount || 0)
+      }
+    );
+    pdfPath = pdfResult.pdfPath;
+    console.log(`PDF regenerated for order_id: ${order_id}`);
+
+    await pool.query(
+      'UPDATE public.bookings SET pdf = $1 WHERE order_id = $2',
+      [pdfPath, order_id]
+    );
 
     fs.access(pdfPath, fs.constants.R_OK, (err) => {
       if (err) {
