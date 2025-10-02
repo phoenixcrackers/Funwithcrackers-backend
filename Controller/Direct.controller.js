@@ -45,22 +45,42 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         addressLine1 = addressLine1.slice(0, splitIndex);
       }
       let formattedDate = 'N/A';
-      if (customerDetails.created_at) {
+      if (type === 'quotation') {
+        // For quotations, use Date.now() if created_at is not available or invalid
         try {
-          // Handle both Date objects and strings
-          const date = customerDetails.created_at instanceof Date 
-            ? customerDetails.created_at 
-            : new Date(customerDetails.created_at);
+          const date = customerDetails.created_at
+            ? (customerDetails.created_at instanceof Date
+                ? customerDetails.created_at
+                : new Date(customerDetails.created_at))
+            : new Date(); // Fallback to current date
           if (!isNaN(date.getTime())) {
             formattedDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
           } else {
-            console.warn(`generatePDF: Invalid date format for created_at: ${customerDetails.created_at}`);
+            console.warn(`generatePDF: Invalid date format for created_at: ${customerDetails.created_at}, using current date`);
+            formattedDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
           }
         } catch (err) {
-          console.error(`generatePDF: Error parsing created_at: ${err.message}`);
+          console.error(`generatePDF: Error parsing created_at: ${err.message}, using current date`);
+          formattedDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
         }
       } else {
-        console.warn('generatePDF: created_at is undefined or null');
+        // For invoices (bookings), use provided created_at or fallback to current date
+        try {
+          const date = customerDetails.created_at
+            ? (customerDetails.created_at instanceof Date
+                ? customerDetails.created_at
+                : new Date(customerDetails.created_at))
+            : new Date();
+          if (!isNaN(date.getTime())) {
+            formattedDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          } else {
+            console.warn(`generatePDF: Invalid date format for created_at: ${customerDetails.created_at}, using current date`);
+            formattedDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          }
+        } catch (err) {
+          console.error(`generatePDF: Error parsing created_at: ${err.message}, using current date`);
+          formattedDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        }
       }
       doc.fontSize(12).font('Helvetica')
         .text(`${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${data.quotation_id || data.order_id}`, 300, 80, { align: 'right' })
@@ -791,7 +811,7 @@ exports.getQuotation = async (req, res) => {
     if (quotation_id.endsWith('.pdf')) quotation_id = quotation_id.replace(/\.pdf$/, '');
 
     let quotationQuery = await pool.query(
-      'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.fwcquotations WHERE quotation_id = $1',
+      'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status,created_at FROM public.fwcquotations WHERE quotation_id = $1',
       [quotation_id]
     );
 
@@ -800,7 +820,7 @@ exports.getQuotation = async (req, res) => {
       if (parts.length > 1) {
         const possibleQuotationId = parts.slice(1).join('-');
         quotationQuery = await pool.query(
-          'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status FROM public.fwcquotations WHERE quotation_id = $1',
+          'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id,created_at, status FROM public.fwcquotations WHERE quotation_id = $1',
           [possibleQuotationId]
         );
         if (quotationQuery.rows.length > 0) quotation_id = possibleQuotationId;
@@ -812,7 +832,7 @@ exports.getQuotation = async (req, res) => {
       return res.status(404).json({ message: 'Quotation not found', quotation_id });
     }
 
-    const { products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status } = quotationQuery.rows[0];
+    const { products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status,created_at } = quotationQuery.rows[0];
     let agent_name = null;
     if (customer_type === 'Customer of Selected Agent' && customer_id) {
       const customerCheck = await pool.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
@@ -840,7 +860,7 @@ exports.getQuotation = async (req, res) => {
       const pdfResult = await generatePDF(
         'quotation',
         { quotation_id, customer_type, total: parseFloat(total || 0), agent_name },
-        { customer_name, address, mobile_number, email, district, state },
+        { customer_name, address, mobile_number, email, district, state, created_at },
         enhancedProducts,
         { 
           net_rate: parseFloat(net_rate || 0), 
