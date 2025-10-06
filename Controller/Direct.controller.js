@@ -335,14 +335,16 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 exports.getCustomers = async (req, res) => {
   try {
     const query = `
-      SELECT id, customer_name AS name, address, mobile_number, email, customer_type, district, state, agent_id
-      FROM public.customers ORDER BY id DESC;
+      SELECT c.id, c.customer_name AS name, c.address, c.mobile_number, c.email, c.customer_type, c.district, c.state, c.agent_id,
+             a.customer_name AS agent_name
+      FROM public.customers c
+      LEFT JOIN public.customers a ON c.agent_id::bigint = a.id AND c.customer_type = 'Customer of Selected Agent'
     `;
     const result = await pool.query(query);
     res.status(200).json(result.rows);
   } catch (err) {
-    console.error(`Failed to fetch customers: ${err.message}`);
-    res.status(500).json({ message: 'Failed to fetch customers', error: err.message });
+    console.error('Failed to fetch customers:', err.stack);
+    res.status(500).json({ error: 'Failed to fetch customers', details: err.message });
   }
 };
 
