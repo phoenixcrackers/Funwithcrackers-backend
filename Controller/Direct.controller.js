@@ -290,15 +290,27 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const additionalDiscountAmount = total * (additionalDiscount / 100);
       const grandTotal = total - additionalDiscountAmount;
 
+
       doc.fontSize(10).font('Helvetica-Bold')
-        .text(`Total: Rs.${total.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
+        .text(`Total: Rs.${netRate.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
       y += 20;
+      if (youSave > 0){
+      doc.fontSize(10).font('Helvetica-Bold')
+        .text(`You Save: Rs.${youSave.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
+      y += 20;
+      }
+      if (additionalDiscount > 0){
+        doc.fontSize(10).font('Helvetica-Bold')
+          .text(`Sub Total: Rs.${total.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
+        y += 20;
+      }
       if (additionalDiscount > 0) {
         doc.text(`Extra Discount: Rs.${additionalDiscountAmount.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
         y += 20;
-        doc.text(`Grand Total: Rs.${grandTotal.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
-        y += 20;
       }
+      doc.fontSize(10).font('Helvetica-Bold')
+        .text(`Grand Total: Rs.${grandTotal.toFixed(2)}`, 350, y, { width: 150, align: 'right' });
+      y += 20;
 
       y += 30;
       if (y + 50 > pageHeight - 50) {
