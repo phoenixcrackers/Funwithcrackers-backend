@@ -615,175 +615,182 @@ exports.createQuotation = async (req, res) => {
   }
 };
 
+// ... existing imports ...
+
 exports.updateQuotation = async (req, res) => {
+  let client;
   try {
     const { quotation_id } = req.params;
-    const { products, net_rate, you_save, total, promo_discount, additional_discount, status } = req.body;
+    const {
+      products,
+      net_rate,
+      you_save,
+      total,
+      promo_discount,
+      additional_discount,
+      status,
+      customer_id,               // <-- NEW
+    } = req.body;
 
-    if (!quotation_id || !/^[a-zA-Z0-9-_]+$/.test(quotation_id)) 
-      return res.status(400).json({ message: 'Invalid or missing Quotation ID', quotation_id });
-    if (products && (!Array.isArray(products) || products.length === 0)) 
-      return res.status(400).json({ message: 'Products array is required and must not be empty', quotation_id });
-    if (total && (isNaN(parseFloat(total)) || parseFloat(total) <= 0)) 
-      return res.status(400).json({ message: 'Total must be a positive number', quotation_id });
-    if (status && !['pending', 'booked', 'canceled'].includes(status)) 
-      return res.status(400).json({ message: 'Invalid status', quotation_id });
+    // ---------- 1. VALIDATE ----------
+    if (!quotation_id || !/^[a-zA-Z0-9-_]+$/.test(quotation_id))
+      return res.status(400).json({ message: 'Invalid Quotation ID', quotation_id });
 
-    const parsedNetRate = net_rate !== undefined ? parseFloat(net_rate) : undefined;
-    const parsedYouSave = you_save !== undefined ? parseFloat(you_save) : undefined;
-    const parsedPromoDiscount = promo_discount !== undefined ? parseFloat(promo_discount) : undefined;
-    const parsedAdditionalDiscount = additional_discount !== undefined ? parseFloat(additional_discount) : undefined;
-    const parsedTotal = total !== undefined ? parseFloat(total) : undefined;
-
-    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedAdditionalDiscount, parsedTotal].some(v => v !== undefined && isNaN(v)))
-      return res.status(400).json({ message: 'net_rate, you_save, total, promo_discount, and additional_discount must be valid numbers', quotation_id });
-
-    const quotationCheck = await pool.query(
+    // ---------- 2. FETCH CURRENT QUOTATION ----------
+    const qCheck = await pool.query(
       'SELECT * FROM public.fwcquotations WHERE quotation_id = $1',
       [quotation_id]
     );
-    if (quotationCheck.rows.length === 0) 
+    if (qCheck.rows.length === 0)
       return res.status(404).json({ message: 'Quotation not found', quotation_id });
 
-    const quotation = quotationCheck.rows[0];
+    const quotation = qCheck.rows[0];
+
+    // ---------- 3. FETCH NEW CUSTOMER (if changed) ----------
     let customerDetails = {
       customer_name: quotation.customer_name,
       address: quotation.address,
       mobile_number: quotation.mobile_number,
       email: quotation.email,
       district: quotation.district,
-      state: quotation.state
+      state: quotation.state,
+      customer_type: quotation.customer_type,
     };
     let agent_name = null;
 
-    if (quotation.customer_id) {
-      const customerCheck = await pool.query(
-        'SELECT customer_name, address, mobile_number, email, district, state, customer_type, agent_id FROM public.customers WHERE id = $1',
-        [quotation.customer_id]
+    if (customer_id && customer_id !== quotation.customer_id?.toString()) {
+      const custRes = await pool.query(
+        `SELECT id, customer_name, address, mobile_number, email,
+                district, state, customer_type, agent_id
+         FROM public.customers WHERE id = $1`,
+        [customer_id]
       );
-      if (customerCheck.rows.length > 0) {
-        customerDetails = customerCheck.rows[0];
-        if (customerDetails.customer_type === 'Customer of Selected Agent' && customerDetails.agent_id) {
-          const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerDetails.agent_id]);
-          if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
-        }
+      if (custRes.rows.length === 0)
+        return res.status(404).json({ message: 'Customer not found', quotation_id });
+
+      const cust = custRes.rows[0];
+      customerDetails = {
+        customer_name: cust.customer_name,
+        address: cust.address,
+        mobile_number: cust.mobile_number,
+        email: cust.email,
+        district: cust.district,
+        state: cust.state,
+        customer_type: cust.customer_type,
+      };
+
+      // fetch agent name if needed
+      if (cust.customer_type === 'Customer of Selected Agent' && cust.agent_id) {
+        const ag = await pool.query(
+          'SELECT customer_name FROM public.customers WHERE id = $1',
+          [cust.agent_id]
+        );
+        if (ag.rows.length) agent_name = ag.rows[0].customer_name;
       }
     }
 
+    // ---------- 4. BUILD PRODUCTS ----------
     let enhancedProducts = quotation.products;
     if (products) {
       enhancedProducts = [];
-      for (const product of products) {
-        const { id, product_type, quantity, price, discount, productname, per } = product;
-        if (!id || !product_type || !productname || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
-          return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)', quotation_id });
+      for (const p of products) {
+        const { id, product_type, quantity, price, discount, productname, per } = p;
+        if (!id || !product_type || !productname || quantity < 1 ||
+            isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
+          return res.status(400).json({ message: 'Invalid product entry', quotation_id });
 
         let productPer = per || 'Unit';
         if (product_type.toLowerCase() !== 'custom') {
-          const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-          if (productCheck.rows.length === 0)
-            return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, quotation_id });
-          productPer = productCheck.rows[0].per || productPer;
+          const tbl = product_type.toLowerCase().replace(/\s+/g, '_');
+          const pr = await pool.query(`SELECT per FROM public.${tbl} WHERE id = $1`, [id]);
+          if (pr.rows.length === 0)
+            return res.status(404).json({ message: `Product ${id} not found`, quotation_id });
+          productPer = pr.rows[0].per || productPer;
         }
-        enhancedProducts.push({ ...product, per: productPer });
+        enhancedProducts.push({ ...p, per: productPer });
       }
     }
 
-    let pdfPath = quotation.pdf;
-    if (products || parsedTotal !== undefined) {
-      const pdfResult = await generatePDF(
-        'quotation',
-        { quotation_id, customer_type: quotation.customer_type, total: parsedTotal || parseFloat(quotation.total || 0), agent_name },
-        customerDetails,
-        enhancedProducts,
-        {
-          net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
-          you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
-          total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0),
-          promo_discount: parsedPromoDiscount !== undefined ? parsedPromoDiscount : parseFloat(quotation.promo_discount || 0),
-          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(quotation.additional_discount || 0)
-        }
-      );
-      pdfPath = pdfResult.pdfPath;
-      console.log(`PDF regenerated at: ${pdfPath} for quotation_id: ${quotation_id}`);
-    }
+    // ---------- 5. RE-GENERATE PDF ----------
+    const pdfResult = await generatePDF(
+      'quotation',
+      {
+        quotation_id,
+        customer_type: customerDetails.customer_type,
+        total: total ? parseFloat(total) : parseFloat(quotation.total || 0),
+        agent_name,
+      },
+      { ...customerDetails, created_at: quotation.created_at },
+      enhancedProducts,
+      {
+        net_rate: net_rate !== undefined ? parseFloat(net_rate) : parseFloat(quotation.net_rate || 0),
+        you_save: you_save !== undefined ? parseFloat(you_save) : parseFloat(quotation.you_save || 0),
+        total: total !== undefined ? parseFloat(total) : parseFloat(quotation.total || 0),
+        promo_discount: promo_discount !== undefined ? parseFloat(promo_discount) : parseFloat(quotation.promo_discount || 0),
+        additional_discount: additional_discount !== undefined ? parseFloat(additional_discount) : parseFloat(quotation.additional_discount || 0),
+      }
+    );
 
+    // ---------- 6. UPDATE DB ----------
     const updateFields = [];
-    const updateValues = [];
-    let paramIndex = 1;
+    const updateVals   = [];
+    let idx = 1;
 
-    if (products) {
-      updateFields.push(`products = $${paramIndex++}`);
-      updateValues.push(JSON.stringify(enhancedProducts));
+    if (products)               { updateFields.push(`products = $${idx++}`); updateVals.push(JSON.stringify(enhancedProducts)); }
+    if (net_rate !== undefined) { updateFields.push(`net_rate = $${idx++}`); updateVals.push(parseFloat(net_rate)); }
+    if (you_save !== undefined) { updateFields.push(`you_save = $${idx++}`); updateVals.push(parseFloat(you_save)); }
+    if (total !== undefined)    { updateFields.push(`total = $${idx++}`);    updateVals.push(parseFloat(total)); }
+    if (promo_discount !== undefined) { updateFields.push(`promo_discount = $${idx++}`); updateVals.push(parseFloat(promo_discount)); }
+    if (additional_discount !== undefined) { updateFields.push(`additional_discount = $${idx++}`); updateVals.push(parseFloat(additional_discount)); }
+    if (status)                 { updateFields.push(`status = $${idx++}`); updateVals.push(status); }
+
+    // ----- NEW CUSTOMER FIELDS -----
+    if (customer_id && customer_id !== quotation.customer_id?.toString()) {
+      updateFields.push(`customer_id = $${idx++}`);      updateVals.push(customer_id);
+      updateFields.push(`customer_name = $${idx++}`);    updateVals.push(customerDetails.customer_name);
+      updateFields.push(`address = $${idx++}`);          updateVals.push(customerDetails.address);
+      updateFields.push(`mobile_number = $${idx++}`);    updateVals.push(customerDetails.mobile_number);
+      updateFields.push(`email = $${idx++}`);            updateVals.push(customerDetails.email);
+      updateFields.push(`district = $${idx++}`);         updateVals.push(customerDetails.district);
+      updateFields.push(`state = $${idx++}`);            updateVals.push(customerDetails.state);
+      updateFields.push(`customer_type = $${idx++}`);    updateVals.push(customerDetails.customer_type);
     }
-    if (parsedNetRate !== undefined) {
-      updateFields.push(`net_rate = $${paramIndex++}`);
-      updateValues.push(parsedNetRate);
-    }
-    if (parsedYouSave !== undefined) {
-      updateFields.push(`you_save = $${paramIndex++}`);
-      updateValues.push(parsedYouSave);
-    }
-    if (parsedTotal !== undefined) {
-      updateFields.push(`total = $${paramIndex++}`);
-      updateValues.push(parsedTotal);
-    }
-    if (parsedPromoDiscount !== undefined) {
-      updateFields.push(`promo_discount = $${paramIndex++}`);
-      updateValues.push(parsedPromoDiscount);
-    }
-    if (parsedAdditionalDiscount !== undefined) {
-      updateFields.push(`additional_discount = $${paramIndex++}`);
-      updateValues.push(parsedAdditionalDiscount);
-    }
-    if (pdfPath) {
-      updateFields.push(`pdf = $${paramIndex++}`);
-      updateValues.push(pdfPath);
-    }
-    if (status) {
-      updateFields.push(`status = $${paramIndex++}`);
-      updateValues.push(status);
-    }
+
+    updateFields.push(`pdf = $${idx++}`); updateVals.push(pdfResult.pdfPath);
     updateFields.push(`updated_at = NOW()`);
 
-    if (updateFields.length === 1) {
-      return res.status(400).json({ message: 'No fields to update', quotation_id });
-    }
+    updateVals.push(quotation_id);   // WHERE clause
 
-    const query = `
-      UPDATE public.fwcquotations 
+    const sql = `
+      UPDATE public.fwcquotations
       SET ${updateFields.join(', ')}
-      WHERE quotation_id = $${paramIndex}
+      WHERE quotation_id = $${idx}
       RETURNING id, quotation_id, status
     `;
-    updateValues.push(quotation_id);
 
-    const result = await pool.query(query, updateValues);
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const upd = await client.query(sql, updateVals);
+    await client.query('COMMIT');
 
-    if (!fs.existsSync(pdfPath)) {
-      console.error(`Failed: PDF file not found at ${pdfPath} for quotation_id ${quotation_id}`);
-      return res.status(500).json({ message: 'PDF file not found after update', error: 'File system error', quotation_id });
-    }
-    fs.access(pdfPath, fs.constants.R_OK, (err) => {
-      if (err) {
-        console.error(`Failed: Cannot read PDF file at ${pdfPath} for quotation_id ${quotation_id}: ${err.message}`);
-        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, quotation_id });
-      }
-      const safeCustomerName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${quotation_id}-quotation.pdf`);
-      const readStream = fs.createReadStream(pdfPath);
-      readStream.on('error', (streamErr) => {
-        console.error(`Failed: Failed to stream PDF for quotation_id ${quotation_id}: ${streamErr.message}`);
-        res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, quotation_id });
-      });
-      readStream.pipe(res);
-      console.log(`PDF streaming initiated for quotation_id: ${quotation_id}`);
+    // ---------- 7. STREAM NEW PDF ----------
+    const safeName = (customerDetails.customer_name || 'unknown')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition',
+      `attachment; filename=${safeName}-${quotation_id}-quotation.pdf`);
+    const stream = fs.createReadStream(pdfResult.pdfPath);
+    stream.on('error', err => {
+      console.error('PDF stream error:', err);
+      if (!res.headersSent) res.status(500).json({ message: 'PDF stream error' });
     });
+    stream.pipe(res);
+
   } catch (err) {
-    console.error(`Failed: Failed to update quotation for quotation_id ${req.params.quotation_id}: ${err.message}`);
-    res.status(500).json({ message: 'Failed to update quotation', error: err.message, quotation_id: req.params.quotation_id });
+    if (client) { await client.query('ROLLBACK'); client.release(); }
+    console.error('updateQuotation error:', err);
+    res.status(500).json({ message: 'Failed to update quotation', error: err.message });
   }
 };
 
