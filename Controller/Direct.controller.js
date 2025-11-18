@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
+const XLSX = require('xlsx');
 
 // Initialize PostgreSQL pool
 const pool = new Pool({
@@ -1428,5 +1429,142 @@ exports.searchQuotations = async (req, res) => {
     res.status(200).json(quotations);
   } catch (err) {
     res.status(500).json({ message: "Failed to search quotations", error: err.message });
+  }
+};
+
+exports.exportQuotationsToExcel = async (req, res) => {
+  let client;
+  try {
+    client = await pool.connect();
+
+    // Fetch all quotations (no auth.users join needed)
+    const result = await client.query(`
+      SELECT 
+        quotation_id,
+        customer_name,
+        customer_type,
+        customer_id,
+        total,
+        created_at
+      FROM public.fwcquotations
+      ORDER BY created_at DESC
+    `);
+
+    const quotations = result.rows;
+
+    // Group by exact customer_type (with fallback)
+    const grouped = quotations.reduce((acc, q) => {
+      let type = q.customer_type?.trim();
+      if (!type) type = "User";
+
+      // Ensure exact match for this special type
+      if (type === "Customer of Selected Agent") {
+        type = "Customer of Selected Agent";
+      }
+
+      if (!acc[type]) acc[type] = [];
+      acc[type].push(q);
+      return acc;
+    }, {});
+
+    const workbook = XLSX.utils.book_new();
+
+    // Correct sheet configuration with EXACT customer_type match
+    const sheetConfig = [
+      { type: "User", name: "User_Quotations" },
+      { type: "Customer", name: "Customer_Quotations" },
+      { type: "Agent", name: "Agent_Quotations" },
+      { type: "Customer of Selected Agent", name: "Cust_of_Agent" }, // Fixed!
+    ];
+
+    for (const { type, name } of sheetConfig) {
+      let data = grouped[type] || [];
+      if (data.length === 0) continue;
+
+      // Only fetch Agent Name for "Customer of Selected Agent"
+      if (type === "Customer of Selected Agent") {
+        for (let q of data) {
+          if (q.customer_id) {
+            try {
+              const agentRes = await client.query(`
+                SELECT c.customer_name AS agent_name
+                FROM public.customers c
+                WHERE c.id = (SELECT agent_id FROM public.customers WHERE id = $1)
+              `, [q.customer_id]);
+
+              q.agent_name = agentRes.rows[0]?.agent_name || "N/A";
+            } catch (err) {
+              console.error(`Failed to fetch agent for customer_id ${q.customer_id}:`, err.message);
+              q.agent_name = "Error";
+            }
+          } else {
+            q.agent_name = "N/A";
+          }
+        }
+      }
+
+      // Map rows for Excel
+      const rows = data.map(q => ({
+        "Quotation ID": q.quotation_id || "N/A",
+        "Customer Name": q.customer_name || "N/A",
+        "Customer Type": q.customer_type || "User",
+        "Total Amount": q.total ? `₹${Math.round(Number(q.total))}` : "₹0",
+        "Date": q.created_at 
+          ? new Date(q.created_at).toLocaleDateString('en-GB') 
+          : "N/A",
+        ...(type === "Customer of Selected Agent" 
+          ? { "Agent Name": q.agent_name || "N/A" } 
+          : {})
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+
+      // Auto-size columns
+      const colWidths = rows.reduce((acc, row) => {
+        Object.keys(row).forEach((key, i) => {
+          const len = (row[key] || "").toString().length;
+          acc[i] = Math.max(acc[i] || 10, len + 4);
+        });
+        return acc;
+      }, []);
+      worksheet["!cols"] = colWidths.map(w => ({ wch: w }));
+
+      // Safe sheet name (max 31 chars, no invalid chars)
+      const safeName = name.replace(/[*?:/\\[\]]/g, "_").substring(0, 31);
+      XLSX.utils.book_append_sheet(workbook, worksheet, safeName);
+    }
+
+    // Generate filename and path
+    const fileName = `Quotations_${new Date().toISOString().slice(0,10)}.xlsx`;
+    const filePath = path.join(__dirname, '../exports', fileName);
+
+    // Ensure exports folder exists
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+    // Write file
+    XLSX.writeFile(workbook, filePath);
+
+    // Send file for download
+    res.download(filePath, fileName, (err) => {
+      if (err) {
+        console.error("Download error:", err);
+        if (!res.headersSent) {
+          res.status(500).send("Failed to download file");
+        }
+      }
+      // Optional: delete after download (uncomment if needed)
+      // fs.unlinkSync(filePath);
+    });
+
+  } catch (err) {
+    console.error("Export Quotations to Excel failed:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        message: "Export failed", 
+        error: err.message 
+      });
+    }
+  } finally {
+    if (client) client.release();
   }
 };
