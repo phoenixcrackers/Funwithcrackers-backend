@@ -1437,9 +1437,11 @@ exports.exportQuotationsToExcel = async (req, res) => {
   try {
     client = await pool.connect();
 
-    // Fetch all quotations (no auth.users join needed)
+    // ================================================
+    // 1. Existing: Export Quotations by Customer Type
+    // ================================================
     const result = await client.query(`
-      SELECT 
+      SELECT
         quotation_id,
         customer_name,
         customer_type,
@@ -1452,16 +1454,10 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
     const quotations = result.rows;
 
-    // Group by exact customer_type (with fallback)
+    // Group by customer_type
     const grouped = quotations.reduce((acc, q) => {
-      let type = q.customer_type?.trim();
-      if (!type) type = "User";
-
-      // Ensure exact match for this special type
-      if (type === "Customer of Selected Agent") {
-        type = "Customer of Selected Agent";
-      }
-
+      let type = q.customer_type?.trim() || "User";
+      if (type === "Customer of Selected Agent") type = "Customer of Selected Agent";
       if (!acc[type]) acc[type] = [];
       acc[type].push(q);
       return acc;
@@ -1469,32 +1465,30 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
     const workbook = XLSX.utils.book_new();
 
-    // Correct sheet configuration with EXACT customer_type match
     const sheetConfig = [
       { type: "User", name: "User_Quotations" },
       { type: "Customer", name: "Customer_Quotations" },
       { type: "Agent", name: "Agent_Quotations" },
-      { type: "Customer of Selected Agent", name: "Cust_of_Agent" }, // Fixed!
+      { type: "Customer of Selected Agent", name: "Cust_of_Agent" },
     ];
 
     for (const { type, name } of sheetConfig) {
       let data = grouped[type] || [];
       if (data.length === 0) continue;
 
-      // Only fetch Agent Name for "Customer of Selected Agent"
+      // Fetch Agent Name only for "Customer of Selected Agent"
       if (type === "Customer of Selected Agent") {
         for (let q of data) {
           if (q.customer_id) {
             try {
               const agentRes = await client.query(`
-                SELECT c.customer_name AS agent_name
-                FROM public.customers c
-                WHERE c.id = (SELECT agent_id FROM public.customers WHERE id = $1)
+                SELECT c2.customer_name AS agent_name
+                FROM public.customers c1
+                INNER JOIN public.customers c2 ON c1.agent_id = c2.id
+                WHERE c1.id = $1
               `, [q.customer_id]);
-
               q.agent_name = agentRes.rows[0]?.agent_name || "N/A";
             } catch (err) {
-              console.error(`Failed to fetch agent for customer_id ${q.customer_id}:`, err.message);
               q.agent_name = "Error";
             }
           } else {
@@ -1503,23 +1497,16 @@ exports.exportQuotationsToExcel = async (req, res) => {
         }
       }
 
-      // Map rows for Excel
       const rows = data.map(q => ({
         "Quotation ID": q.quotation_id || "N/A",
         "Customer Name": q.customer_name || "N/A",
         "Customer Type": q.customer_type || "User",
         "Total Amount": q.total ? `₹${Math.round(Number(q.total))}` : "₹0",
-        "Date": q.created_at 
-          ? new Date(q.created_at).toLocaleDateString('en-GB') 
-          : "N/A",
-        ...(type === "Customer of Selected Agent" 
-          ? { "Agent Name": q.agent_name || "N/A" } 
-          : {})
+        "Date": q.created_at ? new Date(q.created_at).toLocaleDateString('en-GB') : "N/A",
+        ...(type === "Customer of Selected Agent" ? { "Agent Name": q.agent_name || "N/A" } : {})
       }));
 
       const worksheet = XLSX.utils.json_to_sheet(rows);
-
-      // Auto-size columns
       const colWidths = rows.reduce((acc, row) => {
         Object.keys(row).forEach((key, i) => {
           const len = (row[key] || "").toString().length;
@@ -1529,39 +1516,149 @@ exports.exportQuotationsToExcel = async (req, res) => {
       }, []);
       worksheet["!cols"] = colWidths.map(w => ({ wch: w }));
 
-      // Safe sheet name (max 31 chars, no invalid chars)
       const safeName = name.replace(/[*?:/\\[\]]/g, "_").substring(0, 31);
       XLSX.utils.book_append_sheet(workbook, worksheet, safeName);
     }
 
-    // Generate filename and path
-    const fileName = `Quotations_${new Date().toISOString().slice(0,10)}.xlsx`;
-    const filePath = path.join(__dirname, '../exports', fileName);
+    // ================================================
+    // 2. NEW: Products Booked by Agent's Customers (One Sheet Per Agent)
+    // ================================================
+    try {
+      console.log("Generating Agent-wise Product Booking Sheets...");
 
-    // Ensure exports folder exists
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      // Fetch all bookings under "Customer of Selected Agent"
+      const agentBookingsResult = await client.query(`
+        SELECT b.products, b.customer_id
+        FROM public.bookings b
+        INNER JOIN public.customers c ON b.customer_id = c.id
+        WHERE c.customer_type = 'Customer of Selected Agent'
+          AND c.agent_id IS NOT NULL
+          AND b.products IS NOT NULL
+          AND b.status != 'canceled'
+      `);
 
-    // Write file
-    XLSX.writeFile(workbook, filePath);
+      // Map customer_id → agent_name
+      const customerAgentMap = {};
 
-    // Send file for download
-    res.download(filePath, fileName, (err) => {
-      if (err) {
-        console.error("Download error:", err);
-        if (!res.headersSent) {
-          res.status(500).send("Failed to download file");
+      for (const row of agentBookingsResult.rows) {
+        if (!row.customer_id || customerAgentMap[row.customer_id]) continue;
+
+        const agentRes = await client.query(`
+          SELECT c2.customer_name AS agent_name
+          FROM public.customers c1
+          INNER JOIN public.customers c2 ON c1.agent_id = c2.id
+          WHERE c1.id = $1
+        `, [row.customer_id]);
+
+        customerAgentMap[row.customer_id] = agentRes.rows[0]?.agent_name || "Unknown Agent";
+      }
+
+      // Aggregate: Agent → Product → Total Quantity
+      const agentProductTotals = {};
+
+      for (const row of agentBookingsResult.rows) {
+        const agentName = customerAgentMap[row.customer_id] || "Unknown Agent";
+        if (!agentProductTotals[agentName]) agentProductTotals[agentName] = {};
+
+        let products = [];
+        try {
+          products = typeof row.products === 'string' ? JSON.parse(row.products) : row.products;
+        } catch (e) {
+          continue;
+        }
+
+        products.forEach(p => {
+          const name = (p.productname || "Unknown Product").trim();
+          const qty = parseInt(p.quantity) || 0;
+          agentProductTotals[agentName][name] = (agentProductTotals[agentName][name] || 0) + qty;
+        });
+      }
+
+      // Create one sheet per agent
+      for (const [agentName, productMap] of Object.entries(agentProductTotals)) {
+        const rows = Object.entries(productMap)
+          .map(([productName, totalQty]) => ({
+            "Product Name": productName,
+            "Total Booked Quantity": totalQty
+          }))
+          .sort((a, b) => b["Total Booked Quantity"] - a["Total Booked Quantity"]);
+
+        if (rows.length === 0) continue;
+
+        const worksheet = XLSX.utils.json_to_sheet(rows);
+
+        // Auto-size columns
+        worksheet["!cols"] = [
+          { wch: 45 },
+          { wch: 20 }
+        ];
+
+        // Safe sheet name
+        let baseName = agentName.replace(/[*?:/\\[\]]/g, "_").substring(0, 28);
+        if (baseName.length < 3) baseName = "Agent";
+        let sheetName = baseName;
+        let counter = 1;
+        while (workbook.SheetNames.includes(sheetName)) {
+          sheetName = baseName.substring(0, 31 - `_${counter}`.length) + `_${counter}`;
+          counter++;
+        }
+
+        XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+      }
+
+      // Optional: Add "All Agents Combined" Summary Sheet
+      const allAgentProducts = {};
+      for (const productMap of Object.values(agentProductTotals)) {
+        for (const [name, qty] of Object.entries(productMap)) {
+          allAgentProducts[name] = (allAgentProducts[name] || 0) + qty;
         }
       }
-      // Optional: delete after download (uncomment if needed)
+
+      if (Object.keys(allAgentProducts).length > 0) {
+        const allRows = Object.entries(allAgentProducts)
+          .map(([name, qty]) => ({
+            "Product Name": name,
+            "Total Booked (All Agents)": qty
+          }))
+          .sort((a, b) => b["Total Booked (All Agents)"] - a["Total Booked (All Agents)"]);
+
+        const allWs = XLSX.utils.json_to_sheet(allRows);
+        allWs["!cols"] = [{ wch: 50 }, { wch: 25 }];
+        XLSX.utils.book_append_sheet(workbook, allWs, "All_Agents_Products");
+      }
+
+      console.log(`Added ${Object.keys(agentProductTotals).length} agent product sheets + summary`);
+    } catch (agentErr) {
+      console.error("Agent product sheets failed (continuing export):", agentErr.message);
+      // Non-critical error — continue
+    }
+
+    // ================================================
+    // 3. Write File & Send Download
+    // ================================================
+    const fileName = `PhoenixCrackers_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
+    const filePath = path.join(__dirname, '../exports', fileName);
+
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    XLSX.writeFile(workbook, filePath);
+
+    res.download(filePath, fileName, (err) => {
+      if (err) {
+        console.error("Download failed:", err);
+        if (!res.headersSent) res.status(500).send("Failed to download file");
+      } else {
+        console.log(`Exported successfully: ${fileName}`);
+      }
+      // Optional: delete after download
       // fs.unlinkSync(filePath);
     });
 
   } catch (err) {
-    console.error("Export Quotations to Excel failed:", err);
+    console.error("Export failed completely:", err);
     if (!res.headersSent) {
-      res.status(500).json({ 
-        message: "Export failed", 
-        error: err.message 
+      res.status(500).json({
+        message: "Export failed",
+        error: err.message
       });
     }
   } finally {
