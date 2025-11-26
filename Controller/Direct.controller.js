@@ -1437,9 +1437,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
   try {
     client = await pool.connect();
 
-    // ================================================
-    // 1. Existing: Export Quotations by Customer Type
-    // ================================================
     const result = await client.query(`
       SELECT
         quotation_id,
@@ -1520,44 +1517,25 @@ exports.exportQuotationsToExcel = async (req, res) => {
       XLSX.utils.book_append_sheet(workbook, worksheet, safeName);
     }
 
-    // ================================================
-    // 2. NEW: Products Booked by Agent's Customers (One Sheet Per Agent)
-    // ================================================
     try {
-      console.log("Generating Agent-wise Product Booking Sheets...");
+      console.log("Generating Agent-wise Product Quotation Sheets...");
 
-      // Fetch all bookings under "Customer of Selected Agent"
-      const agentBookingsResult = await client.query(`
-        SELECT b.products, b.customer_id
-        FROM public.bookings b
-        INNER JOIN public.customers c ON b.customer_id = c.id
+      // Fetch all quotations under "Customer of Selected Agent" with agent_name joined
+      const agentQuotationsResult = await client.query(`
+        SELECT q.products, q.customer_id, c2.customer_name AS agent_name
+        FROM public.fwcquotations q
+        INNER JOIN public.customers c ON q.customer_id = c.id
+        INNER JOIN public.customers c2 ON c.agent_id = c2.id
         WHERE c.customer_type = 'Customer of Selected Agent'
           AND c.agent_id IS NOT NULL
-          AND b.products IS NOT NULL
-          AND b.status != 'canceled'
+          AND q.products IS NOT NULL
       `);
-
-      // Map customer_id → agent_name
-      const customerAgentMap = {};
-
-      for (const row of agentBookingsResult.rows) {
-        if (!row.customer_id || customerAgentMap[row.customer_id]) continue;
-
-        const agentRes = await client.query(`
-          SELECT c2.customer_name AS agent_name
-          FROM public.customers c1
-          INNER JOIN public.customers c2 ON c1.agent_id = c2.id
-          WHERE c1.id = $1
-        `, [row.customer_id]);
-
-        customerAgentMap[row.customer_id] = agentRes.rows[0]?.agent_name || "Unknown Agent";
-      }
 
       // Aggregate: Agent → Product → Total Quantity
       const agentProductTotals = {};
 
-      for (const row of agentBookingsResult.rows) {
-        const agentName = customerAgentMap[row.customer_id] || "Unknown Agent";
+      for (const row of agentQuotationsResult.rows) {
+        const agentName = row.agent_name || "Unknown Agent";
         if (!agentProductTotals[agentName]) agentProductTotals[agentName] = {};
 
         let products = [];
@@ -1579,9 +1557,9 @@ exports.exportQuotationsToExcel = async (req, res) => {
         const rows = Object.entries(productMap)
           .map(([productName, totalQty]) => ({
             "Product Name": productName,
-            "Total Booked Quantity": totalQty
+            "Total Quoted Quantity": totalQty
           }))
-          .sort((a, b) => b["Total Booked Quantity"] - a["Total Booked Quantity"]);
+          .sort((a, b) => b["Total Quoted Quantity"] - a["Total Quoted Quantity"]);
 
         if (rows.length === 0) continue;
 
@@ -1618,24 +1596,19 @@ exports.exportQuotationsToExcel = async (req, res) => {
         const allRows = Object.entries(allAgentProducts)
           .map(([name, qty]) => ({
             "Product Name": name,
-            "Total Booked (All Agents)": qty
+            "Total Quoted (All Agents)": qty
           }))
-          .sort((a, b) => b["Total Booked (All Agents)"] - a["Total Booked (All Agents)"]);
+          .sort((a, b) => b["Total Quoted (All Agents)"] - a["Total Quoted (All Agents)"]);
 
         const allWs = XLSX.utils.json_to_sheet(allRows);
         allWs["!cols"] = [{ wch: 50 }, { wch: 25 }];
         XLSX.utils.book_append_sheet(workbook, allWs, "All_Agents_Products");
       }
-
-      console.log(`Added ${Object.keys(agentProductTotals).length} agent product sheets + summary`);
     } catch (agentErr) {
       console.error("Agent product sheets failed (continuing export):", agentErr.message);
       // Non-critical error — continue
     }
 
-    // ================================================
-    // 3. Write File & Send Download
-    // ================================================
     const fileName = `PhoenixCrackers_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
     const filePath = path.join(__dirname, '../exports', fileName);
 
@@ -1644,17 +1617,15 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
     res.download(filePath, fileName, (err) => {
       if (err) {
-        console.error("Download failed:", err);
+        console.error("Download failed:");
         if (!res.headersSent) res.status(500).send("Failed to download file");
       } else {
         console.log(`Exported successfully: ${fileName}`);
       }
-      // Optional: delete after download
-      // fs.unlinkSync(filePath);
     });
 
   } catch (err) {
-    console.error("Export failed completely:", err);
+    console.error("Export failed completely:");
     if (!res.headersSent) {
       res.status(500).json({
         message: "Export failed",
