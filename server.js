@@ -35,18 +35,14 @@ app.locals.upload = upload;
 
 // Routes (exactly the same as before)
 app.use('/api', require('./Router/Inventory.router'));
-app.use('/api', require('./Router/Godown.router'));
 app.use('/api', require('./Router/Admin.router'));
-app.use('/api', require('./Router/Analysis.router'));
-app.use('/api', require('./Router/Search.router'));
-app.use('/api', require('./Router/GodownAnalytics.router'));
-app.use('/api', require('./Router/Booking.router'));
-app.use('/api', require('./Router/Wdispatch.router'));
-app.use('/api', require('./Router/Payments.router'));
-app.use('/api', require('./Router/Delivery.router'));
-app.use('/api', require('./Router/Company.router'));
-app.use('/api/binvent', require('./Router/Binvent.router'));
-app.use('/api/', require('./Router/Billing.router'));
+app.use('/api/locations', require('./Router/Location.router'));
+app.use('/api/directcust', require('./Router/Directcust.router'));
+app.use('/api/direct', require('./Router/Direct.router'));
+app.use('/api/tracking', require('./Router/Tracking.router'));
+app.use('/api', require('./Router/Banner.router'));
+app.use('/api', require('./Router/Promocode.router'));
+app.use('/api', require('./Router/SalesAnalysis.router'));
 
 // Global error handler
 app.use((err, req, res, next) => {
