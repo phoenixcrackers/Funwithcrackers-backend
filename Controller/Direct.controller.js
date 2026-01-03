@@ -13,19 +13,19 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
 });
 
-const generatePDF = (type, data, customerDetails, products, dbValues) => {
+const generatePDFBuffer = (type, data, customerDetails, products, dbValues) => {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ margin: 50, size: 'A4' });
-      const safeCustomerName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      const pdfDir = path.resolve(__dirname, '../pdf_data');
-      if (!fs.existsSync(pdfDir)) {
-        fs.mkdirSync(pdfDir, { recursive: true });
-        fs.chmodSync(pdfDir, 0o770);
-      }
-      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${data.order_id || data.quotation_id}-${type}.pdf`);
-      const stream = fs.createWriteStream(pdfPath, { flags: 'w', mode: 0o660 });
-      doc.pipe(stream);
+
+      // In-memory buffer
+      const buffers = [];
+      doc.on('data', buffers.push.bind(buffers));
+      doc.on('end', () => {
+        const pdfBuffer = Buffer.concat(buffers);
+        resolve(pdfBuffer);
+      });
+      doc.on('error', (err) => reject(err));
 
       // Header
       doc.fontSize(20).font('Helvetica-Bold').text(type === 'quotation' ? 'Quotation' : 'Estimate Bill', 50, 50, { align: 'center' });
@@ -323,22 +323,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('For any queries, contact us at +91 63836 59214', 50, y + 15, { align: 'center' });
 
       doc.end();
-      stream.on('finish', () => {
-        if (!fs.existsSync(pdfPath)) {
-          reject(new Error(`PDF file not created at ${pdfPath}`));
-          return;
-        }
-        fs.access(pdfPath, fs.constants.R_OK, (err) => {
-          if (err) {
-            reject(new Error(`PDF file at ${pdfPath} is not readable: ${err.message}`));
-            return;
-          }
-          resolve({ pdfPath, calculatedTotal: grandTotal });
-        });
-      });
-      stream.on('error', (err) => {
-        reject(new Error(`Stream error while creating PDF at ${pdfPath}: ${err.message}`));
-      });
     } catch (err) {
       reject(new Error(`Error generating PDF: ${err.message}`));
     }
@@ -542,14 +526,13 @@ exports.createQuotation = async (req, res) => {
 
     let pdfPath;
     try {
-      const pdfResult = await generatePDF(
+      const pdfResult = await generatePDFBuffer(
         'quotation',
         { quotation_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
         customerDetails,
         enhancedProducts,
         { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
       );
-      pdfPath = pdfResult.pdfPath;
       console.log(`PDF generated`);
     } catch (pdfError) {
       console.error(`Failed: PDF generation failed for quotation_id ${quotation_id}: ${pdfError.message}`);
@@ -713,7 +696,7 @@ exports.updateQuotation = async (req, res) => {
     }
 
     // ---------- 5. RE-GENERATE PDF ----------
-    const pdfResult = await generatePDF(
+    const pdfResult = await generatePDFBuffer(
       'quotation',
       {
         quotation_id,
@@ -823,110 +806,70 @@ exports.deleteQuotation = async (req, res) => {
 exports.getQuotation = async (req, res) => {
   try {
     let { quotation_id } = req.params;
-    console.log(`getQuotation called with quotation_id: ${quotation_id}`);
-
-    if (!quotation_id || quotation_id === 'undefined' || !/^[a-zA-Z0-9-_]+$/.test(quotation_id)) {
-      console.error(`Failed: Invalid or undefined quotation_id received: ${quotation_id}`);
-      return res.status(400).json({ message: 'Invalid or missing quotation_id', received_quotation_id: quotation_id });
+    if (!quotation_id || !/^[a-zA-Z0-9-_]+$/.test(quotation_id)) {
+      return res.status(400).json({ message: 'Invalid quotation_id' });
     }
-
     if (quotation_id.endsWith('.pdf')) quotation_id = quotation_id.replace(/\.pdf$/, '');
 
-    let quotationQuery = await pool.query(
-      'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status,created_at FROM public.fwcquotations WHERE quotation_id = $1',
+    const result = await pool.query(
+      `SELECT products, net_rate, you_save, total, promo_discount, additional_discount,
+              customer_name, address, mobile_number, email, district, state, customer_type,
+              customer_id, created_at
+       FROM public.fwcquotations WHERE quotation_id = $1`,
       [quotation_id]
     );
 
-    if (quotationQuery.rows.length === 0) {
-      const parts = quotation_id.split('-');
-      if (parts.length > 1) {
-        const possibleQuotationId = parts.slice(1).join('-');
-        quotationQuery = await pool.query(
-          'SELECT products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id,created_at, status FROM public.fwcquotations WHERE quotation_id = $1',
-          [possibleQuotationId]
-        );
-        if (quotationQuery.rows.length > 0) quotation_id = possibleQuotationId;
-      }
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Quotation not found' });
     }
 
-    if (quotationQuery.rows.length === 0) {
-      console.error(`Failed: No quotation found for quotation_id: ${quotation_id}`);
-      return res.status(404).json({ message: 'Quotation not found', quotation_id });
-    }
-
-    const { products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, pdf, customer_id, status,created_at } = quotationQuery.rows[0];
+    const row = result.rows[0];
     let agent_name = null;
-    if (customer_type === 'Customer of Selected Agent' && customer_id) {
-      const customerCheck = await pool.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
-      if (customerCheck.rows.length > 0 && customerCheck.rows[0].agent_id) {
-        const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerCheck.rows[0].agent_id]);
-        if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
-      }
-    }
-
-    let pdfPath = pdf;
-    if (!fs.existsSync(pdf)) {
-      console.log(`PDF not found at ${pdf}, regenerating for quotation_id: ${quotation_id}`);
-      let parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
-      let enhancedProducts = [];
-      for (const p of parsedProducts) {
-        if (!p.per) {
-          const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
-          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
-          const per = productCheck.rows[0]?.per || '';
-          enhancedProducts.push({ ...p, per });
-        } else {
-          enhancedProducts.push(p);
-        }
-      }
-      const pdfResult = await generatePDF(
-        'quotation',
-        { quotation_id, customer_type, total: parseFloat(total || 0), agent_name },
-        { customer_name, address, mobile_number, email, district, state, created_at },
-        enhancedProducts,
-        { 
-          net_rate: parseFloat(net_rate || 0), 
-          you_save: parseFloat(you_save || 0), 
-          total: parseFloat(total || 0), 
-          promo_discount: parseFloat(promo_discount || 0),
-          additional_discount: parseFloat(additional_discount || 0)
-        }
+    if (row.customer_type === 'Customer of Selected Agent' && row.customer_id) {
+      const agentRes = await pool.query(
+        `SELECT c2.customer_name AS agent_name
+         FROM public.customers c1
+         JOIN public.customers c2 ON c1.agent_id = c2.id
+         WHERE c1.id = $1`,
+        [row.customer_id]
       );
-      pdfPath = pdfResult.pdfPath;
-      console.log(`PDF regenerated at: ${pdfPath} for quotation_id: ${quotation_id}`);
-
-      await pool.query(
-        'UPDATE public.fwcquotations SET pdf = $1 WHERE quotation_id = $2',
-        [pdfPath, quotation_id]
-      );
+      agent_name = agentRes.rows[0]?.agent_name || null;
     }
 
-    if (!fs.existsSync(pdfPath)) {
-      console.error(`Failed: PDF file not found at ${pdfPath} for quotation_id: ${quotation_id}`);
-      return res.status(404).json({ message: 'PDF file not found after generation', error: 'File system error', quotation_id });
-    }
-
-    fs.access(pdfPath, fs.constants.R_OK, (err) => {
-      if (err) {
-        console.error(`Failed: Cannot read PDF file at ${pdfPath} for quotation_id ${quotation_id}: ${err.message}`);
-        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, quotation_id });
+    // Enhance products with 'per' if missing
+    let parsedProducts = typeof row.products === 'string' ? JSON.parse(row.products) : row.products;
+    for (const p of parsedProducts) {
+      if (!p.per && p.product_type.toLowerCase() !== 'custom') {
+        const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
+        const perRes = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+        if (perRes.rows.length > 0) p.per = perRes.rows[0].per;
       }
-      const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${quotation_id}-quotation.pdf`);
-      const readStream = fs.createReadStream(pdfPath);
-      readStream.on('error', (streamErr) => {
-        console.error(`Failed: Failed to stream PDF for quotation_id ${quotation_id}: ${streamErr.message}`);
-        if (!res.headersSent) {
-          res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, quotation_id });
-        }
-      });
-      readStream.pipe(res);
-      console.log(`PDF streaming initiated for quotation_id: ${quotation_id}`);
-    });
+    }
+
+    // Generate PDF buffer dynamically
+    const pdfBuffer = await generatePDFBuffer(
+      'quotation',
+      { quotation_id, customer_type: row.customer_type, agent_name },
+      { ...row, created_at: row.created_at },
+      parsedProducts,
+      {
+        net_rate: parseFloat(row.net_rate || 0),
+        you_save: parseFloat(row.you_save || 0),
+        total: parseFloat(row.total || 0),
+        additional_discount: parseFloat(row.additional_discount || 0),
+      }
+    );
+
+    const safeCustomerName = (row.customer_name || 'unknown')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${quotation_id}-quotation.pdf`);
+    res.send(pdfBuffer);
+
   } catch (err) {
-    console.error(`Failed: Failed to fetch quotation for quotation_id ${req.params.quotation_id}: ${err.message}`);
-    res.status(500).json({ message: 'Failed to fetch quotation', error: err.message, quotation_id: req.params.quotation_id });
+    console.error('getQuotation error:', err);
+    res.status(500).json({ message: 'Failed to generate quotation PDF', error: err.message });
   }
 };
 
@@ -1011,14 +954,13 @@ exports.createBooking = async (req, res) => {
 
     let pdfPath;
     try {
-      const pdfResult = await generatePDF(
+      const pdfResult = await generatePDFBuffer(
         'invoice',
         { order_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
         customerDetails,
         enhancedProducts,
         { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
       );
-      pdfPath = pdfResult.pdfPath;
       console.log(`PDF generated`);
     } catch (pdfError) {
       console.error(`Failed: PDF generation failed for order_id ${order_id}: ${pdfError.message}`);
@@ -1177,7 +1119,7 @@ exports.updateBooking = async (req, res) => {
 
     let pdfPath = booking.pdf;
     if (products || parsedTotal !== undefined) {
-      const pdfResult = await generatePDF(
+      const pdfResult = await generatePDFBuffer(
         'invoice',
         { order_id, customer_type: booking.customer_type, total: parsedTotal || parseFloat(booking.total || 0), agent_name },
         customerDetails,
@@ -1190,8 +1132,6 @@ exports.updateBooking = async (req, res) => {
           additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(booking.additional_discount || 0)
         }
       );
-      pdfPath = pdfResult.pdfPath;
-      console.log(`PDF regenerated at: ${pdfPath} for order_id: ${order_id}`);
     }
 
     const updateFields = [];
@@ -1279,94 +1219,69 @@ exports.updateBooking = async (req, res) => {
 };
 
 exports.getInvoice = async (req, res) => {
-  const { order_id } = req.params;
-  console.log(`getInvoice called with order_id: ${order_id}`);
-
-  if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) {
-    console.error(`Failed: Invalid order_id received: ${order_id}`);
-    return res.status(400).json({ message: 'Invalid or missing order_id', received_order_id: order_id });
-  }
-
   try {
+    const { order_id } = req.params;
+    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) {
+      return res.status(400).json({ message: 'Invalid order_id' });
+    }
+
     const result = await pool.query(
-      'SELECT pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status, created_at FROM public.bookings WHERE order_id = $1',
+      `SELECT products, net_rate, you_save, total, promo_discount, additional_discount,
+              customer_name, address, mobile_number, email, district, state, customer_type,
+              customer_id, created_at
+       FROM public.bookings WHERE order_id = $1`,
       [order_id]
     );
+
     if (result.rows.length === 0) {
-      console.error(`Failed: No booking found for order_id: ${order_id}`);
-      return res.status(404).json({ message: 'Booking not found', order_id });
+      return res.status(404).json({ message: 'Booking not found' });
     }
 
-    const { pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status, created_at } = result.rows[0];
-    console.log(`getInvoice: Fetched created_at: ${created_at}`);
-
-    let pdfPath = pdf;
+    const row = result.rows[0];
     let agent_name = null;
-
-    if (customer_type === 'Customer of Selected Agent' && customer_id) {
-      const customerCheck = await pool.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
-      if (customerCheck.rows.length > 0 && customerCheck.rows[0].agent_id) {
-        const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerCheck.rows[0].agent_id]);
-        if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
-      }
+    if (row.customer_type === 'Customer of Selected Agent' && row.customer_id) {
+      const agentRes = await pool.query(
+        `SELECT c2.customer_name AS agent_name
+         FROM public.customers c1
+         JOIN public.customers c2 ON c1.agent_id = c2.id
+         WHERE c1.id = $1`,
+        [row.customer_id]
+      );
+      agent_name = agentRes.rows[0]?.agent_name || null;
     }
 
-    // Force PDF regeneration for testing
-    console.log(`Forcing PDF regeneration for order_id: ${order_id}`);
-    let parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
-    let enhancedProducts = [];
+    let parsedProducts = typeof row.products === 'string' ? JSON.parse(row.products) : row.products;
     for (const p of parsedProducts) {
-      if (!p.per) {
+      if (!p.per && p.product_type.toLowerCase() !== 'custom') {
         const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
-        const per = productCheck.rows[0]?.per || 'Unit';
-        enhancedProducts.push({ ...p, per });
-      } else {
-        enhancedProducts.push(p);
+        const perRes = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+        if (perRes.rows.length > 0) p.per = perRes.rows[0].per;
       }
     }
-    const pdfResult = await generatePDF(
+
+    const pdfBuffer = await generatePDFBuffer(
       'invoice',
-      { order_id, customer_type, total: parseFloat(total || 0), agent_name },
-      { customer_name, address, mobile_number, email, district, state, created_at: created_at.toISOString() }, // Convert to ISO string
-      enhancedProducts,
-      { 
-        net_rate: parseFloat(net_rate || 0), 
-        you_save: parseFloat(you_save || 0), 
-        total: parseFloat(total || 0), 
-        promo_discount: parseFloat(promo_discount || 0),
-        additional_discount: parseFloat(additional_discount || 0)
+      { order_id, customer_type: row.customer_type, agent_name },
+      { ...row, created_at: row.created_at },
+      parsedProducts,
+      {
+        net_rate: parseFloat(row.net_rate || 0),
+        you_save: parseFloat(row.you_save || 0),
+        total: parseFloat(row.total || 0),
+        additional_discount: parseFloat(row.additional_discount || 0),
       }
     );
-    pdfPath = pdfResult.pdfPath;
-    console.log(`PDF regenerated for order_id: ${order_id}`);
 
-    await pool.query(
-      'UPDATE public.bookings SET pdf = $1 WHERE order_id = $2',
-      [pdfPath, order_id]
-    );
+    const safeCustomerName = (row.customer_name || 'unknown')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 
-    fs.access(pdfPath, fs.constants.R_OK, (err) => {
-      if (err) {
-        console.error(`Failed: Cannot read PDF file at ${pdfPath} for order_id ${order_id}: ${err.message}`);
-        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, order_id });
-      }
-      const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
-      const readStream = fs.createReadStream(pdfPath);
-      readStream.on('error', (streamErr) => {
-        console.error(`Failed: Failed to stream PDF for order_id ${order_id}: ${streamErr.message}`);
-        if (!res.headersSent) {
-          res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, order_id });
-        }
-      });
-      readStream.pipe(res);
-      console.log(`PDF streaming initiated for order_id: ${order_id}`);
-    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
+    res.send(pdfBuffer);
+
   } catch (err) {
-    console.error(`Failed: Failed to fetch invoice for order_id ${order_id}: ${err.message}`);
-    res.status(500).json({ message: 'Failed to fetch invoice', error: err.message, order_id });
+    console.error('getInvoice error:', err);
+    res.status(500).json({ message: 'Failed to generate invoice PDF', error: err.message });
   }
 };
 
