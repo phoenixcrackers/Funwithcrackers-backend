@@ -613,7 +613,7 @@ exports.updateQuotation = async (req, res) => {
       promo_discount,
       additional_discount,
       status,
-      customer_id,               // <-- NEW
+      customer_id, // NEW: allow changing customer
     } = req.body;
 
     // ---------- 1. VALIDATE ----------
@@ -630,7 +630,7 @@ exports.updateQuotation = async (req, res) => {
 
     const quotation = qCheck.rows[0];
 
-    // ---------- 3. FETCH NEW CUSTOMER (if changed) ----------
+    // ---------- 3. FETCH NEW CUSTOMER DETAILS (if customer_id changed) ----------
     let customerDetails = {
       customer_name: quotation.customer_name,
       address: quotation.address,
@@ -639,6 +639,7 @@ exports.updateQuotation = async (req, res) => {
       district: quotation.district,
       state: quotation.state,
       customer_type: quotation.customer_type,
+      created_at: quotation.created_at,
     };
     let agent_name = null;
 
@@ -661,21 +662,22 @@ exports.updateQuotation = async (req, res) => {
         district: cust.district,
         state: cust.state,
         customer_type: cust.customer_type,
+        created_at: quotation.created_at, // keep original creation date
       };
 
-      // fetch agent name if needed
       if (cust.customer_type === 'Customer of Selected Agent' && cust.agent_id) {
         const ag = await pool.query(
           'SELECT customer_name FROM public.customers WHERE id = $1',
           [cust.agent_id]
         );
-        if (ag.rows.length) agent_name = ag.rows[0].customer_name;
+        if (ag.rows.length > 0) agent_name = ag.rows[0].customer_name;
       }
     }
 
     // ---------- 4. BUILD PRODUCTS ----------
-    let enhancedProducts = quotation.products;
-    if (products) {
+    let enhancedProducts = quotation.products ? (typeof quotation.products === 'string' ? JSON.parse(quotation.products) : quotation.products) : [];
+
+    if (products && Array.isArray(products)) {
       enhancedProducts = [];
       for (const p of products) {
         const { id, product_type, quantity, price, discount, productname, per } = p;
@@ -695,55 +697,58 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-    // ---------- 5. RE-GENERATE PDF ----------
-    const pdfResult = await generatePDFBuffer(
-      'quotation',
-      {
-        quotation_id,
-        customer_type: customerDetails.customer_type,
-        total: total ? parseFloat(total) : parseFloat(quotation.total || 0),
-        agent_name,
-      },
-      { ...customerDetails, created_at: quotation.created_at },
-      enhancedProducts,
-      {
-        net_rate: net_rate !== undefined ? parseFloat(net_rate) : parseFloat(quotation.net_rate || 0),
-        you_save: you_save !== undefined ? parseFloat(you_save) : parseFloat(quotation.you_save || 0),
-        total: total !== undefined ? parseFloat(total) : parseFloat(quotation.total || 0),
-        promo_discount: promo_discount !== undefined ? parseFloat(promo_discount) : parseFloat(quotation.promo_discount || 0),
-        additional_discount: additional_discount !== undefined ? parseFloat(additional_discount) : parseFloat(quotation.additional_discount || 0),
-      }
-    );
-
-    // ---------- 6. UPDATE DB ----------
+    // ---------- 5. UPDATE DATABASE (no pdf column) ----------
     const updateFields = [];
-    const updateVals   = [];
+    const updateVals = [];
     let idx = 1;
 
-    if (products)               { updateFields.push(`products = $${idx++}`); updateVals.push(JSON.stringify(enhancedProducts)); }
-    if (net_rate !== undefined) { updateFields.push(`net_rate = $${idx++}`); updateVals.push(parseFloat(net_rate)); }
-    if (you_save !== undefined) { updateFields.push(`you_save = $${idx++}`); updateVals.push(parseFloat(you_save)); }
-    if (total !== undefined)    { updateFields.push(`total = $${idx++}`);    updateVals.push(parseFloat(total)); }
-    if (promo_discount !== undefined) { updateFields.push(`promo_discount = $${idx++}`); updateVals.push(parseFloat(promo_discount)); }
-    if (additional_discount !== undefined) { updateFields.push(`additional_discount = $${idx++}`); updateVals.push(parseFloat(additional_discount)); }
-    if (status)                 { updateFields.push(`status = $${idx++}`); updateVals.push(status); }
-
-    // ----- NEW CUSTOMER FIELDS -----
-    if (customer_id && customer_id !== quotation.customer_id?.toString()) {
-      updateFields.push(`customer_id = $${idx++}`);      updateVals.push(customer_id);
-      updateFields.push(`customer_name = $${idx++}`);    updateVals.push(customerDetails.customer_name);
-      updateFields.push(`address = $${idx++}`);          updateVals.push(customerDetails.address);
-      updateFields.push(`mobile_number = $${idx++}`);    updateVals.push(customerDetails.mobile_number);
-      updateFields.push(`email = $${idx++}`);            updateVals.push(customerDetails.email);
-      updateFields.push(`district = $${idx++}`);         updateVals.push(customerDetails.district);
-      updateFields.push(`state = $${idx++}`);            updateVals.push(customerDetails.state);
-      updateFields.push(`customer_type = $${idx++}`);    updateVals.push(customerDetails.customer_type);
+    if (products) {
+      updateFields.push(`products = $${idx++}`);
+      updateVals.push(JSON.stringify(enhancedProducts));
+    }
+    if (net_rate !== undefined) {
+      updateFields.push(`net_rate = $${idx++}`);
+      updateVals.push(parseFloat(net_rate));
+    }
+    if (you_save !== undefined) {
+      updateFields.push(`you_save = $${idx++}`);
+      updateVals.push(parseFloat(you_save));
+    }
+    if (total !== undefined) {
+      updateFields.push(`total = $${idx++}`);
+      updateVals.push(parseFloat(total));
+    }
+    if (promo_discount !== undefined) {
+      updateFields.push(`promo_discount = $${idx++}`);
+      updateVals.push(parseFloat(promo_discount));
+    }
+    if (additional_discount !== undefined) {
+      updateFields.push(`additional_discount = $${idx++}`);
+      updateVals.push(parseFloat(additional_discount));
+    }
+    if (status) {
+      updateFields.push(`status = $${idx++}`);
+      updateVals.push(status);
     }
 
-    updateFields.push(`pdf = $${idx++}`); updateVals.push(pdfResult.pdfPath);
-    updateFields.push(`updated_at = NOW()`);
+    // Update customer fields if customer changed
+    if (customer_id && customer_id !== quotation.customer_id?.toString()) {
+      updateFields.push(`customer_id = $${idx++}`);     updateVals.push(customer_id);
+      updateFields.push(`customer_name = $${idx++}`);   updateVals.push(customerDetails.customer_name);
+      updateFields.push(`address = $${idx++}`);         updateVals.push(customerDetails.address);
+      updateFields.push(`mobile_number = $${idx++}`);   updateVals.push(customerDetails.mobile_number);
+      updateFields.push(`email = $${idx++}`);           updateVals.push(customerDetails.email);
+      updateFields.push(`district = $${idx++}`);        updateVals.push(customerDetails.district);
+      updateFields.push(`state = $${idx++}`);           updateVals.push(customerDetails.state);
+      updateFields.push(`customer_type = $${idx++}`);   updateVals.push(customerDetails.customer_type);
+    }
 
-    updateVals.push(quotation_id);   // WHERE clause
+    if (updateFields.length === 0) {
+      return res.status(400).json({ message: 'No fields provided to update' });
+    }
+
+    updateFields.push(`updated_at = NOW()`);
+    updateVals.push(quotation_id); // for WHERE clause
 
     const sql = `
       UPDATE public.fwcquotations
@@ -754,25 +759,45 @@ exports.updateQuotation = async (req, res) => {
 
     client = await pool.connect();
     await client.query('BEGIN');
-    const upd = await client.query(sql, updateVals);
+    await client.query(sql, updateVals);
     await client.query('COMMIT');
 
-    // ---------- 7. STREAM NEW PDF ----------
-    const safeName = (customerDetails.customer_name || 'unknown')
-      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    // ---------- 6. GENERATE PDF IN MEMORY ----------
+    const pdfBuffer = await generatePDFBuffer(
+      'quotation',
+      {
+        quotation_id,
+        customer_type: customerDetails.customer_type,
+        total: total !== undefined ? parseFloat(total) : parseFloat(quotation.total || 0),
+        agent_name,
+      },
+      customerDetails,
+      enhancedProducts,
+      {
+        net_rate: net_rate !== undefined ? parseFloat(net_rate) : parseFloat(quotation.net_rate || 0),
+        you_save: you_save !== undefined ? parseFloat(you_save) : parseFloat(quotation.you_save || 0),
+        additional_discount: additional_discount !== undefined ? parseFloat(additional_discount) : parseFloat(quotation.additional_discount || 0),
+      }
+    );
+
+    // ---------- 7. STREAM PDF BUFFER ----------
+    const safeName = (customerDetails.customer_name || 'customer')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition',
-      `attachment; filename=${safeName}-${quotation_id}-quotation.pdf`);
-    const stream = fs.createReadStream(pdfResult.pdfPath);
-    stream.on('error', err => {
-      console.error('PDF stream error:', err);
-      if (!res.headersSent) res.status(500).json({ message: 'PDF stream error' });
-    });
-    stream.pipe(res);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=${safeName}-${quotation_id}-quotation.pdf`
+    );
+    res.send(pdfBuffer);
 
   } catch (err) {
-    if (client) { await client.query('ROLLBACK'); client.release(); }
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      client.release();
+    }
     console.error('updateQuotation error:', err);
     res.status(500).json({ message: 'Failed to update quotation', error: err.message });
   }
