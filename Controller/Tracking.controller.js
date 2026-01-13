@@ -8,6 +8,14 @@ const pool = new Pool({
   host: process.env.PGHOST,
   port: process.env.PGPORT,
   database: process.env.PGDATABASE,
+  max: 20,               // ← lower from 30 — Render free/hobby tiers have low connection limits
+  connectionTimeoutMillis: 5000,   // fail fast if can't connect
+  idleTimeoutMillis: 10000,        // release connections after 10s idle
+  allowExitOnIdle: true,           // helps in some node-postgres versions
+  // Very important on Render — forces SSL
+  ssl: {
+    rejectUnauthorized: false     // Render uses self-signed certs
+  }
 });
 
 const ACCESS_TOKEN = 'EAAKZAUdN55kEBPLcupTZAXpIZCAszZBupSiKxRCWe5zYiZB0LZCuUFl3vTLjWDBuAgU1u6f29S8e2XkdzgrSfn8PpiT0jLSZCAOU9aGhDoOlTL9MrxZBgG0vZBCDt3dHLFlM2GHOrwvJP2WjZB2yQix9FOh6Wduq1LhXgJQpHYTYoBGbiTc8ek9LAZBXeXjPQJa8QaPAvvbcGwPIAw63P1dOAX4qfqC8AS7fJDKZAZBLbLmXEM8Hv';

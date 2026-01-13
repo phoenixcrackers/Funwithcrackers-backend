@@ -8,13 +8,29 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// const pool = new Pool({
+//   user: process.env.PGUSER,
+//   password: process.env.PGPASSWORD,
+//   host: process.env.PGHOST,
+//   port: process.env.PGPORT,
+//   database: process.env.PGDATABASE,
+//   max: 20,
+// });
+
 const pool = new Pool({
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
   host: process.env.PGHOST,
   port: process.env.PGPORT,
   database: process.env.PGDATABASE,
-  max: 30,
+  max: 20,               // ← lower from 30 — Render free/hobby tiers have low connection limits
+  connectionTimeoutMillis: 5000,   // fail fast if can't connect
+  idleTimeoutMillis: 10000,        // release connections after 10s idle
+  allowExitOnIdle: true,           // helps in some node-postgres versions
+  // Very important on Render — forces SSL
+  ssl: {
+    rejectUnauthorized: false     // Render uses self-signed certs
+  }
 });
 
 let productTypeCache = {
