@@ -13,27 +13,6 @@ const pool = new Pool({
 const ACCESS_TOKEN = 'EAAKZAUdN55kEBPLcupTZAXpIZCAszZBupSiKxRCWe5zYiZB0LZCuUFl3vTLjWDBuAgU1u6f29S8e2XkdzgrSfn8PpiT0jLSZCAOU9aGhDoOlTL9MrxZBgG0vZBCDt3dHLFlM2GHOrwvJP2WjZB2yQix9FOh6Wduq1LhXgJQpHYTYoBGbiTc8ek9LAZBXeXjPQJa8QaPAvvbcGwPIAw63P1dOAX4qfqC8AS7fJDKZAZBLbLmXEM8Hv';
 const PHONE_NUMBER_ID = '660922473779560';
 
-const createTransportTable = `
-  CREATE TABLE IF NOT EXISTS transport_details (
-    id SERIAL PRIMARY KEY,
-    order_id VARCHAR(50) REFERENCES bookings(order_id),
-    transport_name VARCHAR(100) NOT NULL,
-    lr_number VARCHAR(50) NOT NULL,
-    transport_contact VARCHAR(20),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  )
-`;
-
-const alterBookingsTable = `
-  ALTER TABLE bookings
-  ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20),
-  ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(100),
-  ADD COLUMN IF NOT EXISTS amount_paid NUMERIC
-`;
-
-pool.query(createTransportTable).catch((err) => console.error('Error creating transport table:', err));
-pool.query(alterBookingsTable).catch((err) => console.error('Error altering bookings table:', err));
-
 async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
   if (!mobileNumber) {
     console.warn('Mobile number is missing; skipping WhatsApp notification');
