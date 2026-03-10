@@ -208,10 +208,9 @@ exports.getFilteredBookings = async (req, res) => {
     const { status } = req.query;
     const allowedStatuses = ['paid', 'packed', 'dispatched', 'delivered'];
     let query = `
-      SELECT b.id, b.order_id, b.customer_name, b.district, b.state, b.status, b.products, b.address, b.created_at, b.mobile_number, b.payment_method, b.transaction_id, b.amount_paid, t.transport_name, t.lr_number, t.transport_contact
-      FROM public.bookings b
-      LEFT JOIN transport_details t ON b.order_id = t.order_id
-      WHERE b.status = ANY($1)
+      SELECT id, order_id, customer_name, district, state, status, products, address, created_at, mobile_number, payment_method, transaction_id, amount_paid, transport_name, lr_number, transport_contact
+      FROM public.bookings
+      WHERE status = ANY($1)
     `;
     const params = [allowedStatuses];
     if (status && allowedStatuses.includes(status)) {
@@ -232,43 +231,90 @@ exports.getFilteredBookings = async (req, res) => {
   }
 };
 
-exports.getreportBookings = async (req, res) => {
+exports.getReportBookings = async (req, res) => {
   try {
-    const { status } = req.query;
-    const allowedStatuses = ['paid','dispatched','delivered'];
-    let query = `
+    const allowedBookingStatuses = ['paid', 'dispatched', 'delivered'];
+
+    const bookingsQuery = `
       SELECT 
-        b.id, 
-        b.order_id, 
-        b.customer_name, 
-        b.district, 
-        b.state, 
-        b.status, 
-        b.products, 
-        b.address, 
-        b.created_at, 
-        b.mobile_number, 
-        b.payment_method, 
-        b.transaction_id, 
+        b.id,
+        b.order_id,
+        b.customer_name,
+        b.district,
+        b.state,
+        b.status,
+        b.products,
+        b.address,
+        b.created_at,
+        b.mobile_number,
+        b.payment_method,
+        b.transaction_id,
         b.amount_paid,
         b.total,
-        t.transport_name, 
-        t.lr_number, 
-        t.transport_contact
+        t.transport_name,
+        t.lr_number,
+        t.transport_contact,
+        NULL::text AS quotation_id,
+        NULL::text AS quotation_pdf,
+        'BOOKING' AS source_type
       FROM public.bookings b
       LEFT JOIN transport_details t ON b.order_id = t.order_id
       WHERE b.status = ANY($1)
+      ORDER BY b.created_at DESC
     `;
-    const params = [allowedStatuses];
-    if (status && allowedStatuses.includes(status)) {
-      query += ` AND b.status = $2`;
-      params.push(status);
-    }
-    const result = await pool.query(query, params);
-    res.status(200).json(result.rows);
+
+    const bookingsResult = await pool.query(bookingsQuery, [allowedBookingStatuses]);
+    console.log(`[REPORT] Bookings returned: ${bookingsResult.rowCount}`);
+
+    const quotationsQuery = `
+      SELECT 
+        NULL::integer AS id,
+        NULL::text AS order_id,
+        q.customer_name,
+        q.district,
+        q.state,
+        'quotation_pending' AS status,
+        q.products,
+        q.address,
+        q.created_at,
+        q.mobile_number,
+        NULL::text AS payment_method,
+        NULL::text AS transaction_id,
+        NULL::numeric AS amount_paid,
+        CAST(COALESCE(q.total, '0') AS numeric) AS total,
+        NULL::text AS transport_name,
+        NULL::text AS lr_number,
+        NULL::text AS transport_contact,
+        q.quotation_id,
+        q.pdf AS quotation_pdf,
+        'QUOTATION' AS source_type
+      FROM public.fwcquotations q
+      WHERE NOT EXISTS (
+        SELECT 1 FROM public.bookings b 
+        WHERE b.quotation_id = q.quotation_id
+      )
+      ORDER BY q.created_at DESC
+    `;
+
+    const quotationsResult = await pool.query(quotationsQuery);
+    console.log(`[REPORT] Quotations returned: ${quotationsResult.rowCount}`);
+
+    const combined = [
+      ...bookingsResult.rows,
+      ...quotationsResult.rows
+    ];
+
+    combined.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    console.log(`[REPORT] Total items sent: ${combined.length}`);
+
+    res.status(200).json(combined);
   } catch (err) {
-    console.error('Error fetching filtered bookings:', err);
-    res.status(500).json({ message: 'Failed to fetch filtered bookings' });
+    console.error('Error in getReportBookings:', err);
+    res.status(500).json({ 
+      message: 'Failed to fetch report data', 
+      error: err.message 
+    });
   }
 };
 
@@ -328,15 +374,16 @@ exports.updateFilterBookingStatus = async (req, res) => {
     let transportData = null;
     if (status === 'dispatched' && transportDetails) {
       const transportQuery = `
-        INSERT INTO transport_details (order_id, transport_name, lr_number, transport_contact)
-        VALUES ($1, $2, $3, $4)
+        UPDATE public.bookings
+        SET transport_name = $1, lr_number = $2, transport_contact = $3
+        WHERE id = $4
         RETURNING transport_name, lr_number, transport_contact
       `;
       const transportResult = await pool.query(transportQuery, [
-        result.rows[0].order_id,
         transportDetails.transportName,
         transportDetails.lrNumber,
         transportDetails.transportContact || null,
+        id,
       ]);
       transportData = transportResult.rows[0];
     }
@@ -353,13 +400,12 @@ exports.updateFilterBookingStatus = async (req, res) => {
 };
 
 exports.deleteBooking = async (req, res) => {
-  let client;
+  const client = await pool.connect();
   try {
     const { order_id } = req.params;
-    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) 
+    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id))
       return res.status(400).json({ message: 'Invalid or missing Order ID', order_id });
 
-    client = await pool.connect();
     await client.query('BEGIN');
 
     const bookingCheck = await client.query(
@@ -373,11 +419,11 @@ exports.deleteBooking = async (req, res) => {
 
     const { quotation_id, pdf } = bookingCheck.rows[0];
 
+    // ✅ Delete transport_details first to avoid FK violation
+    await client.query('DELETE FROM transport_details WHERE order_id = $1', [order_id]);
+
     // Delete the booking
-    await client.query(
-      'DELETE FROM public.bookings WHERE order_id = $1',
-      [order_id]
-    );
+    await client.query('DELETE FROM public.bookings WHERE order_id = $1', [order_id]);
 
     // Delete associated quotation if it exists
     if (quotation_id) {
@@ -387,45 +433,25 @@ exports.deleteBooking = async (req, res) => {
       );
       if (quotationCheck.rows.length > 0) {
         const quotationPdf = quotationCheck.rows[0].pdf;
-        await client.query(
-          'DELETE FROM public.fwcquotations WHERE quotation_id = $1',
-          [quotation_id]
-        );
-        // Delete quotation PDF file if it exists
+        await client.query('DELETE FROM public.fwcquotations WHERE quotation_id = $1', [quotation_id]);
         if (quotationPdf && fs.existsSync(quotationPdf)) {
-          try {
-            fs.unlinkSync(quotationPdf);
-            console.log(`Deleted quotation PDF: ${quotationPdf}`);
-          } catch (err) {
-            console.error(`Failed to delete quotation PDF ${quotationPdf}: ${err.message}`);
-            // Continue execution even if PDF deletion fails
-          }
+          try { fs.unlinkSync(quotationPdf); } catch (e) { console.error(`Failed to delete quotation PDF: ${e.message}`); }
         }
       }
     }
 
-    // Delete booking PDF file if it exists
     if (pdf && fs.existsSync(pdf)) {
-      try {
-        fs.unlinkSync(pdf);
-        console.log(`Deleted booking PDF: ${pdf}`);
-      } catch (err) {
-        console.error(`Failed to delete booking PDF ${pdf}: ${err.message}`);
-        // Continue execution even if PDF deletion fails
-      }
+      try { fs.unlinkSync(pdf); } catch (e) { console.error(`Failed to delete booking PDF: ${e.message}`); }
     }
 
     await client.query('COMMIT');
-    res.status(200).json({ message: 'Booking and associated quotation deleted successfully', order_id });
+    res.status(200).json({ message: 'Booking deleted successfully', order_id });
   } catch (err) {
-    if (client) {
-      await client.query('ROLLBACK');
-      client.release();
-    }
+    await client.query('ROLLBACK');
     console.error(`Failed to delete booking for order_id ${req.params.order_id}: ${err.message}`);
-    res.status(500).json({ message: 'Failed to delete booking', error: err.message, order_id: req.params.order_id });
+    res.status(500).json({ message: 'Failed to delete booking', error: err.message });
   } finally {
-    if (client) client.release();
+    client.release(); // ✅ Only released once, here in finally
   }
 };
 
