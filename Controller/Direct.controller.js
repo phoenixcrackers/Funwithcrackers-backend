@@ -3,6 +3,28 @@ const path = require('path');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
 const XLSX = require('xlsx');
+const nodemailer = require('nodemailer');
+
+const transporter = nodemailer.createTransport({
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,              // true for 465, false for 587 + STARTTLS
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS.replace(/\s+/g, ''),
+  },
+  tls: {
+    rejectUnauthorized: false, // helpful on some hosts
+  },
+});
+
+transporter.verify((error, success) => {
+  if (error) {
+    console.error('Transporter verification FAILED:', error);
+  } else {
+    console.log('Transporter is READY! SMTP connection works.');
+  }
+});
 
 // Initialize PostgreSQL pool
 const pool = new Pool({
@@ -1001,13 +1023,11 @@ exports.createBooking = async (req, res) => {
 
     console.log(`Received createBooking request with order_id: ${order_id}`);
 
-    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) 
+    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id))
       return res.status(400).json({ message: 'Invalid or missing Order ID', order_id });
-
-    if (!Array.isArray(products) || products.length === 0) 
+    if (!Array.isArray(products) || products.length === 0)
       return res.status(400).json({ message: 'Products array is required and must not be empty', order_id });
-
-    if (!total || isNaN(parseFloat(total)) || parseFloat(total) <= 0) 
+    if (!total || isNaN(parseFloat(total)) || parseFloat(total) <= 0)
       return res.status(400).json({ message: 'Total must be a positive number', order_id });
 
     const parsedNetRate = parseFloat(net_rate) || 0;
@@ -1028,7 +1048,7 @@ exports.createBooking = async (req, res) => {
         'SELECT id, customer_name, address, mobile_number, email, district, state, customer_type, agent_id FROM public.customers WHERE id = $1',
         [customer_id]
       );
-      if (customerCheck.rows.length === 0) 
+      if (customerCheck.rows.length === 0)
         return res.status(404).json({ message: 'Customer not found', order_id });
 
       const customerRow = customerCheck.rows[0];
@@ -1047,7 +1067,7 @@ exports.createBooking = async (req, res) => {
         if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
       }
     } else {
-      if (finalCustomerType !== 'User') 
+      if (finalCustomerType !== 'User')
         return res.status(400).json({ message: 'Customer type must be "User" for bookings without customer ID', order_id });
       if (!customer_name || !address || !district || !state || !mobile_number)
         return res.status(400).json({ message: 'All customer details must be provided', order_id });
@@ -1070,21 +1090,8 @@ exports.createBooking = async (req, res) => {
       enhancedProducts.push({ ...product, per: productPer });
     }
 
-    let pdfPath;
-    try {
-      const pdfResult = await generatePDFBuffer(
-        'invoice',
-        { order_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
-        customerDetails,
-        enhancedProducts,
-        { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
-      );
-      console.log(`PDF generated`);
-    } catch (pdfError) {
-      console.error(`Failed: PDF generation failed for order_id ${order_id}: ${pdfError.message}`);
-      return res.status(500).json({ message: 'Failed to generate PDF', error: pdfError.message, order_id });
-    }
-
+    // ── Database transaction ─────────────────────────────────────────
+    let createdOrderId;
     client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -1096,9 +1103,10 @@ exports.createBooking = async (req, res) => {
       }
 
       const result = await client.query(`
-        INSERT INTO public.bookings 
-        (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18)
+        INSERT INTO public.bookings
+        (customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount,
+         address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), $18)
         RETURNING id, created_at, customer_type, pdf, order_id
       `, [
         customer_id || null,
@@ -1118,10 +1126,11 @@ exports.createBooking = async (req, res) => {
         customerDetails.state || null,
         finalCustomerType,
         'booked',
-        pdfPath
+        null
       ]);
 
-      console.log(`Booking created`);
+      createdOrderId = result.rows[0].order_id;
+      console.log(`[DB] Booking inserted with order_id: ${createdOrderId}`);
 
       if (quotation_id) {
         const quotationCheck = await client.query(
@@ -1132,7 +1141,6 @@ exports.createBooking = async (req, res) => {
           await client.query('ROLLBACK');
           return res.status(404).json({ message: 'Quotation not found or not in pending status', order_id });
         }
-
         await client.query(
           'UPDATE public.fwcquotations SET status = $1, updated_at = NOW() WHERE quotation_id = $2',
           ['booked', quotation_id]
@@ -1140,24 +1148,147 @@ exports.createBooking = async (req, res) => {
       }
 
       await client.query('COMMIT');
-      res.status(200).json({
-        message: 'Booking created successfully',
-        order_id: result.rows[0].order_id,
-        pdf_path: pdfPath
-      });
+      console.log(`[DB] Transaction committed for order ${order_id}`);
+
     } catch (dbError) {
       await client.query('ROLLBACK');
+      console.error(`[DB] Transaction failed for order ${order_id}: ${dbError.message}`);
       throw dbError;
     } finally {
-      if (client) client.release();
+      client.release();
+      client = null;
     }
+
+    // ── Respond IMMEDIATELY after DB commit ──────────────────────────
+    res.status(200).json({
+      message: 'Booking created successfully',
+      order_id: createdOrderId,
+      email_status: 'queued',
+    });
+
+    // ── PDF + Email in background (non-blocking) ─────────────────────
+    setImmediate(async () => {
+      let pdfBuffer = null;
+      try {
+        pdfBuffer = await generatePDFBuffer(
+          'invoice',
+          { order_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
+          customerDetails,
+          enhancedProducts,
+          { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
+        );
+        console.log(`[PDF] Buffer generated (${pdfBuffer.length} bytes) for order ${order_id}`);
+      } catch (pdfError) {
+        console.error(`[PDF] Generation failed for order ${order_id}: ${pdfError.message}`);
+        // Continue to send email without attachment
+      }
+
+      try {
+        console.log(`[EMAIL] Preparing notification for order ${order_id}`);
+
+        const productRows = enhancedProducts.map((p, i) => {
+          const price     = parseFloat(p.price) || 0;
+          const disc      = parseFloat(p.discount) || 0;
+          const discRate  = price - (price * disc / 100);
+          const lineTotal = discRate * (p.quantity || 1);
+          return `
+            <tr style="background:${i % 2 === 0 ? '#f8fafc' : 'white'}">
+              <td style="padding:7px;border:1px solid #e2e8f0;">${i + 1}</td>
+              <td style="padding:7px;border:1px solid #e2e8f0;">${p.productname || 'N/A'}</td>
+              <td style="padding:7px;border:1px solid #e2e8f0;text-align:center;">${p.quantity || 1} ${p.per || ''}</td>
+              <td style="padding:7px;border:1px solid #e2e8f0;text-align:right;">₹${discRate.toFixed(2)}</td>
+              <td style="padding:7px;border:1px solid #e2e8f0;text-align:right;">₹${lineTotal.toFixed(2)}</td>
+            </tr>`;
+        }).join('');
+
+        const productListText = enhancedProducts
+          .map((p, i) => `  ${i + 1}. ${p.productname} x${p.quantity} @ ₹${parseFloat(p.price).toFixed(2)}`)
+          .join('\n');
+
+        const mailOptions = {
+          from: `"Phoenix Crackers Alerts" <${process.env.EMAIL_USER}>`,
+          to: 'phoenixcrackersfwc@gmail.com',
+          subject: `🎆 New Booking #${order_id} — ₹${parsedTotal.toFixed(2)}`,
+          text: [
+            `New booking received on Phoenix Crackers!`,
+            ``,
+            `Order ID     : ${order_id}`,
+            `Customer     : ${customerDetails.customer_name || 'N/A'}`,
+            `Mobile       : ${customerDetails.mobile_number || 'N/A'}`,
+            `Location     : ${customerDetails.district || 'N/A'}, ${customerDetails.state || 'N/A'}`,
+            `Customer Type: ${finalCustomerType}`,
+            `Total Amount : ₹${parsedTotal.toFixed(2)}`,
+            `You Save     : ₹${parsedYouSave.toFixed(2)}`,
+            `Date         : ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`,
+            ``,
+            `Products (${enhancedProducts.length} items):`,
+            productListText,
+          ].join('\n'),
+          html: `
+            <div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;color:#1e293b;">
+              <div style="background:#1D4ED8;padding:20px 24px;border-radius:8px 8px 0 0;">
+                <h2 style="color:white;margin:0;font-size:20px;">🎆 New Booking Received!</h2>
+                <p style="color:#bfdbfe;margin:4px 0 0;">Phoenix Crackers, Sivakasi</p>
+              </div>
+              <div style="border:1px solid #e2e8f0;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px;">
+                <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                  <tr style="background:#f1f5f9;">
+                    <td style="padding:10px;font-weight:bold;width:40%;border:1px solid #e2e8f0;">Order ID</td>
+                    <td style="padding:10px;border:1px solid #e2e8f0;font-weight:bold;color:#1D4ED8;">${order_id}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px;font-weight:bold;border:1px solid #e2e8f0;">Customer</td>
+                    <td style="padding:10px;border:1px solid #e2e8f0;">${customerDetails.customer_name || 'N/A'}</td>
+                  </tr>
+                  <tr style="background:#f1f5f9;">
+                    <td style="padding:10px;font-weight:bold;border:1px solid #e2e8f0;">Mobile</td>
+                    <td style="padding:10px;border:1px solid #e2e8f0;">${customerDetails.mobile_number || 'N/A'}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px;font-weight:bold;border:1px solid #e2e8f0;">Location</td>
+                    <td style="padding:10px;border:1px solid #e2e8f0;">${customerDetails.district || 'N/A'}, ${customerDetails.state || 'N/A'}</td>
+                  </tr>
+                  <tr style="background:#f1f5f9;">
+                    <td style="padding:10px;font-weight:bold;border:1px solid #e2e8f0;">Customer Type</td>
+                    <td style="padding:10px;border:1px solid #e2e8f0;">${finalCustomerType}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px;font-weight:bold;border:1px solid #e2e8f0;">Total Amount</td>
+                    <td style="padding:10px;border:1px solid #e2e8f0;color:#15803D;font-weight:bold;font-size:16px;">₹${parsedTotal.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px;font-weight:bold;border:1px solid #e2e8f0;">Booked On</td>
+                    <td style="padding:10px;border:1px solid #e2e8f0;">${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</td>
+                  </tr>
+                </table>
+                </table>
+
+                <p style="color:#94a3b8;font-size:11px;margin-top:20px;text-align:center;">
+                  Automated alert from Phoenix Crackers system — funwithcrackers.com
+                </p>
+              </div>
+            </div>
+          `,
+        };
+
+        const info = await transporter.sendMail(mailOptions);
+        console.log(`[EMAIL] SUCCESS for order ${order_id} — MessageId: ${info.messageId}`);
+        console.log(`[EMAIL] Accepted: ${JSON.stringify(info.accepted)}`);
+
+      } catch (emailErr) {
+        console.error(`[EMAIL] FAILED for order ${order_id}: ${emailErr.message}`);
+        if (emailErr.code)     console.error(`[EMAIL] Code: ${emailErr.code}`);
+        if (emailErr.response) console.error(`[EMAIL] SMTP: ${emailErr.response}`);
+      }
+    });
+
   } catch (err) {
     if (client) {
-      await client.query('ROLLBACK');
+      try { await client.query('ROLLBACK'); } catch (_) {}
       client.release();
     }
-    console.error(`Failed: Failed to create booking for order_id ${req.body.order_id}: ${err.message}`);
-    res.status(500).json({ message: 'Failed to create booking', error: err.message, order_id: req.body.order_id });
+    console.error(`[CRITICAL] createBooking failed for ${req.body?.order_id}: ${err.message}`);
+    res.status(500).json({ message: 'Failed to create booking', error: err.message });
   }
 };
 
