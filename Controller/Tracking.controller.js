@@ -372,12 +372,19 @@ exports.deleteBooking = async (req, res) => {
       'SELECT quotation_id, pdf FROM public.bookings WHERE order_id = $1',
       [order_id]
     );
+
     if (bookingCheck.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Booking not found', order_id });
     }
 
     const { quotation_id, pdf } = bookingCheck.rows[0];
+
+    // === CRITICAL: Delete child records first (foreign key violation) ===
+    await client.query(
+      'DELETE FROM transport_details WHERE order_id = $1',
+      [order_id]
+    );
 
     // Delete the booking
     await client.query(
@@ -388,23 +395,23 @@ exports.deleteBooking = async (req, res) => {
     // Delete associated quotation if it exists
     if (quotation_id) {
       const quotationCheck = await client.query(
-        'SELECT pdf FROM public.quotations WHERE quotation_id = $1',
+        'SELECT pdf FROM public.fwcquotations WHERE quotation_id = $1',  // Note: table name was "quotations" in old code — using fwcquotations here to match main file
         [quotation_id]
       );
+
       if (quotationCheck.rows.length > 0) {
         const quotationPdf = quotationCheck.rows[0].pdf;
         await client.query(
-          'DELETE FROM public.quotations WHERE quotation_id = $1',
+          'DELETE FROM public.fwcquotations WHERE quotation_id = $1',
           [quotation_id]
         );
-        // Delete quotation PDF file if it exists
+
         if (quotationPdf && fs.existsSync(quotationPdf)) {
           try {
             fs.unlinkSync(quotationPdf);
             console.log(`Deleted quotation PDF: ${quotationPdf}`);
           } catch (err) {
             console.error(`Failed to delete quotation PDF ${quotationPdf}: ${err.message}`);
-            // Continue execution even if PDF deletion fails
           }
         }
       }
@@ -417,19 +424,25 @@ exports.deleteBooking = async (req, res) => {
         console.log(`Deleted booking PDF: ${pdf}`);
       } catch (err) {
         console.error(`Failed to delete booking PDF ${pdf}: ${err.message}`);
-        // Continue execution even if PDF deletion fails
       }
     }
 
     await client.query('COMMIT');
-    res.status(200).json({ message: 'Booking and associated quotation deleted successfully', order_id });
+    res.status(200).json({ 
+      message: 'Booking and associated data deleted successfully', 
+      order_id 
+    });
+
   } catch (err) {
     if (client) {
       await client.query('ROLLBACK');
-      client.release();
     }
     console.error(`Failed to delete booking for order_id ${req.params.order_id}: ${err.message}`);
-    res.status(500).json({ message: 'Failed to delete booking', error: err.message, order_id: req.params.order_id });
+    res.status(500).json({ 
+      message: 'Failed to delete booking', 
+      error: err.message, 
+      order_id: req.params.order_id 
+    });
   } finally {
     if (client) client.release();
   }
