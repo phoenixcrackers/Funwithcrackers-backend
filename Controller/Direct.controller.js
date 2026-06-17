@@ -1538,24 +1538,40 @@ exports.searchBookings = async (req, res) => {
   try {
     const { customer_name, mobile_number } = req.body;
 
-    if (!customer_name || !mobile_number) {
-      return res.status(400).json({ message: 'Customer name and mobile number are required' });
+    if (!mobile_number) {
+      return res.status(400).json({ 
+        message: "Mobile number is required" 
+      });
+    }
+    if (mobile_number.length !== 10) {
+      return res.status(400).json({ 
+        message: "Please enter a valid 10-digit mobile number" 
+      });
     }
 
-    const query = `
-      SELECT id, order_id, quotation_id, products, net_rate, you_save, total, 
-             promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, 
+    let query = `
+      SELECT id, order_id, quotation_id, products, net_rate, you_save, total,
+             promo_discount, customer_name, address, mobile_number, email, district, state,
              customer_type, status, created_at, pdf, transport_name, lr_number, transport_contact,
              processing_date, dispatch_date, delivery_date
-      FROM public.bookings 
-      WHERE LOWER(customer_name) LIKE LOWER($1) 
-      AND mobile_number LIKE $2
-      ORDER BY created_at DESC
+      FROM public.bookings
+      WHERE mobile_number LIKE $1
     `;
 
-    const result = await pool.query(query, [`%${customer_name}%`, `%${mobile_number}%`]);
+    const params = [`%${mobile_number}%`];
+
+    // If customer name is also provided, add it to search
+    if (customer_name && customer_name.trim()) {
+      query += ` AND LOWER(customer_name) LIKE LOWER($2)`;
+      params.push(`%${customer_name.trim()}%`);
+    }
+
+    query += ` ORDER BY created_at DESC`;
+
+    const result = await pool.query(query, params);
     res.status(200).json(result.rows);
   } catch (err) {
+    console.error('Failed to search bookings:', err.message);
     res.status(500).json({ message: 'Failed to search bookings', error: err.message });
   }
 };
