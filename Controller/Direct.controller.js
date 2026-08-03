@@ -33,15 +33,26 @@ const pool = new Pool({
   host: process.env.PGHOST,
   port: process.env.PGPORT,
   database: process.env.PGDATABASE,
-  max: 20,               // ← lower from 30 — Render free/hobby tiers have low connection limits
-  connectionTimeoutMillis: 5000,   // fail fast if can't connect
-  idleTimeoutMillis: 10000,        // release connections after 10s idle
-  allowExitOnIdle: true,           // helps in some node-postgres versions
-  // Very important on Render — forces SSL
-  ssl: {
-    rejectUnauthorized: false     // Render uses self-signed certs
-  }
 });
+
+// ── Sequential ID generator — produces IDs like "2026quo1", "2026ord1" ──
+// Looks at existing IDs for the current year prefix and returns prefix + (max + 1).
+const generateSequentialId = async (dbClient, table, column, prefix) => {
+  const result = await dbClient.query(
+    `SELECT ${column} FROM public.${table} WHERE ${column} LIKE $1`,
+    [`${prefix}%`]
+  );
+  const regex = new RegExp(`^${prefix}(\\d+)$`);
+  let maxNum = 0;
+  for (const row of result.rows) {
+    const match = String(row[column]).match(regex);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxNum) maxNum = num;
+    }
+  }
+  return `${prefix}${maxNum + 1}`;
+};
 
 const generatePDFBuffer = (type, data, customerDetails, products, dbValues) => {
   return new Promise((resolve, reject) => {
@@ -562,22 +573,23 @@ exports.getAllQuotations = async (req, res) => {
   }
 };
 
+// ── createQuotation ──────────────────────────────────────────────────────
+// quotation_id is now generated server-side as `${currentYear}quo${n}`
+// (e.g. 2026quo1, 2026quo2, ...) — it is never accepted from the client.
 exports.createQuotation = async (req, res) => {
   let client;
   try {
     const {
-      customer_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount,
+      customer_id, products, net_rate, you_save, total, promo_discount, additional_discount,
       customer_type, customer_name, address, mobile_number, email, district, state
     } = req.body;
 
-    console.log(`Received createQuotation request with quotation_id: ${quotation_id}`);
+    console.log('Received createQuotation request');
 
-    if (!quotation_id || !/^[a-zA-Z0-9-_]+$/.test(quotation_id)) 
-      return res.status(400).json({ message: 'Invalid or missing Quotation ID', quotation_id });
-    if (!Array.isArray(products) || products.length === 0) 
-      return res.status(400).json({ message: 'Products array is required and must not be empty', quotation_id });
-    if (!total || isNaN(parseFloat(total)) || parseFloat(total) <= 0) 
-      return res.status(400).json({ message: 'Total must be a positive number', quotation_id });
+    if (!Array.isArray(products) || products.length === 0)
+      return res.status(400).json({ message: 'Products array is required and must not be empty' });
+    if (!total || isNaN(parseFloat(total)) || parseFloat(total) <= 0)
+      return res.status(400).json({ message: 'Total must be a positive number' });
 
     const parsedNetRate = parseFloat(net_rate) || 0;
     const parsedYouSave = parseFloat(you_save) || 0;
@@ -586,7 +598,7 @@ exports.createQuotation = async (req, res) => {
     const parsedTotal = parseFloat(total);
 
     if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedAdditionalDiscount, parsedTotal].some(v => isNaN(v)))
-      return res.status(400).json({ message: 'net_rate, you_save, promo_discount, additional_discount, and total must be valid numbers', quotation_id });
+      return res.status(400).json({ message: 'net_rate, you_save, promo_discount, additional_discount, and total must be valid numbers' });
 
     let finalCustomerType = customer_type || 'User';
     let customerDetails = { customer_name, address, mobile_number, email, district, state };
@@ -597,8 +609,8 @@ exports.createQuotation = async (req, res) => {
         'SELECT id, customer_name, address, mobile_number, email, district, state, customer_type, agent_id FROM public.customers WHERE id = $1',
         [customer_id]
       );
-      if (customerCheck.rows.length === 0) 
-        return res.status(404).json({ message: 'Customer not found', quotation_id });
+      if (customerCheck.rows.length === 0)
+        return res.status(404).json({ message: 'Customer not found' });
 
       const customerRow = customerCheck.rows[0];
       finalCustomerType = customer_type || customerRow.customer_type || 'User';
@@ -616,52 +628,42 @@ exports.createQuotation = async (req, res) => {
         if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
       }
     } else {
-      if (finalCustomerType !== 'User') 
-        return res.status(400).json({ message: 'Customer type must be "User" for quotations without customer ID', quotation_id });
+      if (finalCustomerType !== 'User')
+        return res.status(400).json({ message: 'Customer type must be "User" for quotations without customer ID' });
       if (!customer_name || !address || !district || !state || !mobile_number)
-        return res.status(400).json({ message: 'All customer details must be provided', quotation_id });
+        return res.status(400).json({ message: 'All customer details must be provided' });
     }
 
     const enhancedProducts = [];
     for (const product of products) {
       const { id, product_type, quantity, price, discount, productname, per } = product;
       if (!id || !product_type || !productname || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
-        return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)', quotation_id });
+        return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)' });
 
       let productPer = per || 'Unit'; // Default to 'Unit' if per is not provided
       if (product_type.toLowerCase() !== 'custom') {
         const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
         const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
         if (productCheck.rows.length === 0)
-          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, quotation_id });
+          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
         productPer = productCheck.rows[0].per || productPer;
       }
       enhancedProducts.push({ ...product, per: productPer });
     }
 
-    let pdfPath;
-    try {
-      const pdfResult = await generatePDFBuffer(
-        'quotation',
-        { quotation_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
-        customerDetails,
-        enhancedProducts,
-        { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
-      );
-      console.log(`PDF generated`);
-    } catch (pdfError) {
-      console.error(`Failed: PDF generation failed for quotation_id ${quotation_id}: ${pdfError.message}`);
-      return res.status(500).json({ message: 'Failed to generate PDF', error: pdfError.message, quotation_id });
-    }
-
+    let quotation_id;
     client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      const existingQuotation = await client.query('SELECT id FROM public.fwcquotations WHERE quotation_id = $1', [quotation_id]);
-      if (existingQuotation.rows.length > 0) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ message: 'Quotation ID already exists', quotation_id });
+      // ── Generate a unique sequential quotation_id for the current year ──
+      const year = new Date().getFullYear();
+      let attempts = 0;
+      while (attempts < 10) {
+        quotation_id = await generateSequentialId(client, 'fwcquotations', 'quotation_id', `${year}quo`);
+        const existing = await client.query('SELECT id FROM public.fwcquotations WHERE quotation_id = $1', [quotation_id]);
+        if (existing.rows.length === 0) break;
+        attempts++;
       }
 
       const result = await client.query(`
@@ -686,31 +688,46 @@ exports.createQuotation = async (req, res) => {
         customerDetails.state || null,
         finalCustomerType,
         'pending',
-        pdfPath
+        null
       ]);
 
-      console.log(`Quotation created`);
+      quotation_id = result.rows[0].quotation_id;
+      console.log(`Quotation created: ${quotation_id}`);
 
       await client.query('COMMIT');
-
-      res.status(200).json({
-        message: 'Quotation created successfully',
-        quotation_id: result.rows[0].quotation_id,
-        pdf_path: pdfPath
-      });
     } catch (dbError) {
       await client.query('ROLLBACK');
       throw dbError;
     } finally {
       if (client) client.release();
     }
+
+    // ── PDF generation (best-effort, doesn't block quotation creation) ──
+    try {
+      await generatePDFBuffer(
+        'quotation',
+        { quotation_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
+        customerDetails,
+        enhancedProducts,
+        { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
+      );
+      console.log('PDF generated');
+    } catch (pdfError) {
+      console.error(`PDF generation failed for quotation_id ${quotation_id}: ${pdfError.message}`);
+    }
+
+    res.status(200).json({
+      message: 'Quotation created successfully',
+      quotation_id,
+      pdf_path: null
+    });
   } catch (err) {
     if (client) {
-      await client.query('ROLLBACK');
+      try { await client.query('ROLLBACK'); } catch (_) {}
       client.release();
     }
-    console.error(`Failed: Failed to create quotation for quotation_id ${req.body.quotation_id}: ${err.message}`);
-    res.status(500).json({ message: 'Failed to create quotation', error: err.message, quotation_id: req.body.quotation_id });
+    console.error(`Failed to create quotation: ${err.message}`);
+    res.status(500).json({ message: 'Failed to create quotation', error: err.message });
   }
 };
 
@@ -1013,22 +1030,23 @@ exports.getQuotation = async (req, res) => {
   }
 };
 
+// ── createBooking ────────────────────────────────────────────────────────
+// order_id is now generated server-side as `${currentYear}ord${n}`
+// (e.g. 2026ord1, 2026ord2, ...) — it is never accepted from the client.
 exports.createBooking = async (req, res) => {
   let client;
   try {
     const {
-      customer_id, order_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount,
+      customer_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount,
       customer_type, customer_name, address, mobile_number, email, district, state
     } = req.body;
 
-    console.log(`Received createBooking request with order_id: ${order_id}`);
+    console.log('Received createBooking request');
 
-    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id))
-      return res.status(400).json({ message: 'Invalid or missing Order ID', order_id });
     if (!Array.isArray(products) || products.length === 0)
-      return res.status(400).json({ message: 'Products array is required and must not be empty', order_id });
+      return res.status(400).json({ message: 'Products array is required and must not be empty' });
     if (!total || isNaN(parseFloat(total)) || parseFloat(total) <= 0)
-      return res.status(400).json({ message: 'Total must be a positive number', order_id });
+      return res.status(400).json({ message: 'Total must be a positive number' });
 
     const parsedNetRate = parseFloat(net_rate) || 0;
     const parsedYouSave = parseFloat(you_save) || 0;
@@ -1037,7 +1055,7 @@ exports.createBooking = async (req, res) => {
     const parsedTotal = parseFloat(total);
 
     if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedAdditionalDiscount, parsedTotal].some(v => isNaN(v)))
-      return res.status(400).json({ message: 'net_rate, you_save, promo_discount, additional_discount, and total must be valid numbers', order_id });
+      return res.status(400).json({ message: 'net_rate, you_save, promo_discount, additional_discount, and total must be valid numbers' });
 
     let finalCustomerType = customer_type || 'User';
     let customerDetails = { customer_name, address, mobile_number, email, district, state };
@@ -1049,7 +1067,7 @@ exports.createBooking = async (req, res) => {
         [customer_id]
       );
       if (customerCheck.rows.length === 0)
-        return res.status(404).json({ message: 'Customer not found', order_id });
+        return res.status(404).json({ message: 'Customer not found' });
 
       const customerRow = customerCheck.rows[0];
       finalCustomerType = customer_type || customerRow.customer_type || 'User';
@@ -1068,38 +1086,42 @@ exports.createBooking = async (req, res) => {
       }
     } else {
       if (finalCustomerType !== 'User')
-        return res.status(400).json({ message: 'Customer type must be "User" for bookings without customer ID', order_id });
+        return res.status(400).json({ message: 'Customer type must be "User" for bookings without customer ID' });
       if (!customer_name || !address || !district || !state || !mobile_number)
-        return res.status(400).json({ message: 'All customer details must be provided', order_id });
+        return res.status(400).json({ message: 'All customer details must be provided' });
     }
 
     const enhancedProducts = [];
     for (const product of products) {
       const { id, product_type, quantity, price, discount, productname, per } = product;
       if (!id || !product_type || !productname || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
-        return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)', order_id });
+        return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)' });
 
       let productPer = per || 'Unit';
       if (product_type.toLowerCase() !== 'custom') {
         const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
         const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
         if (productCheck.rows.length === 0)
-          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, order_id });
+          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
         productPer = productCheck.rows[0].per || productPer;
       }
       enhancedProducts.push({ ...product, per: productPer });
     }
 
     // ── Database transaction ─────────────────────────────────────────
-    let createdOrderId;
+    let order_id;
     client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      const existingBooking = await client.query('SELECT id FROM public.bookings WHERE order_id = $1', [order_id]);
-      if (existingBooking.rows.length > 0) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ message: 'Order ID already exists', order_id });
+      // ── Generate a unique sequential order_id for the current year ──
+      const year = new Date().getFullYear();
+      let attempts = 0;
+      while (attempts < 10) {
+        order_id = await generateSequentialId(client, 'bookings', 'order_id', `${year}ord`);
+        const existing = await client.query('SELECT id FROM public.bookings WHERE order_id = $1', [order_id]);
+        if (existing.rows.length === 0) break;
+        attempts++;
       }
 
       const result = await client.query(`
@@ -1129,8 +1151,8 @@ exports.createBooking = async (req, res) => {
         null
       ]);
 
-      createdOrderId = result.rows[0].order_id;
-      console.log(`[DB] Booking inserted with order_id: ${createdOrderId}`);
+      order_id = result.rows[0].order_id;
+      console.log(`[DB] Booking inserted with order_id: ${order_id}`);
 
       if (quotation_id) {
         const quotationCheck = await client.query(
@@ -1162,7 +1184,7 @@ exports.createBooking = async (req, res) => {
     // ── Respond IMMEDIATELY after DB commit ──────────────────────────
     res.status(200).json({
       message: 'Booking created successfully',
-      order_id: createdOrderId,
+      order_id,
       email_status: 'queued',
     });
 
@@ -1287,7 +1309,7 @@ exports.createBooking = async (req, res) => {
       try { await client.query('ROLLBACK'); } catch (_) {}
       client.release();
     }
-    console.error(`[CRITICAL] createBooking failed for ${req.body?.order_id}: ${err.message}`);
+    console.error(`[CRITICAL] createBooking failed: ${err.message}`);
     res.status(500).json({ message: 'Failed to create booking', error: err.message });
   }
 };
