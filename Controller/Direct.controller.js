@@ -1722,7 +1722,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
     try {
       console.log("Generating Agent-wise Product Quotation Sheets...");
 
-      // Fetch all quotations under "Customer of Selected Agent" with agent_name joined
       const agentQuotationsResult = await client.query(`
         SELECT q.products, q.customer_id, c2.customer_name AS agent_name
         FROM public.fwcquotations q
@@ -1733,7 +1732,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
           AND q.products IS NOT NULL
       `);
 
-      // Aggregate: Agent → Product → Total Quantity
       const agentProductTotals = {};
 
       for (const row of agentQuotationsResult.rows) {
@@ -1754,7 +1752,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
         });
       }
 
-      // Create one sheet per agent
       for (const [agentName, productMap] of Object.entries(agentProductTotals)) {
         const rows = Object.entries(productMap)
           .map(([productName, totalQty]) => ({
@@ -1766,14 +1763,8 @@ exports.exportQuotationsToExcel = async (req, res) => {
         if (rows.length === 0) continue;
 
         const worksheet = XLSX.utils.json_to_sheet(rows);
+        worksheet["!cols"] = [{ wch: 45 }, { wch: 20 }];
 
-        // Auto-size columns
-        worksheet["!cols"] = [
-          { wch: 45 },
-          { wch: 20 }
-        ];
-
-        // Safe sheet name
         let baseName = agentName.replace(/[*?:/\\[\]]/g, "_").substring(0, 28);
         if (baseName.length < 3) baseName = "Agent";
         let sheetName = baseName;
@@ -1786,7 +1777,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
         XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
       }
 
-      // Optional: Add "All Agents Combined" Summary Sheet
       const allAgentProducts = {};
       for (const productMap of Object.values(agentProductTotals)) {
         for (const [name, qty] of Object.entries(productMap)) {
@@ -1808,26 +1798,28 @@ exports.exportQuotationsToExcel = async (req, res) => {
       }
     } catch (agentErr) {
       console.error("Agent product sheets failed (continuing export):", agentErr.message);
-      // Non-critical error — continue
     }
 
-    const fileName = `PhoenixCrackers_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
-    const filePath = path.join(__dirname, '../exports', fileName);
+    // ── Write to an in-memory buffer instead of disk ──────────────────
+    // Serverless hosts (Lambda/Vercel/etc.) ship a read-only filesystem
+    // outside of /tmp, so fs.mkdirSync / XLSX.writeFile throws EROFS there.
+    // XLSX.write with type:'buffer' avoids touching disk entirely.
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const fileName = `PhoenixCrackers_Export_${new Date().toISOString().slice(0, 10)}.xlsx`;
 
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    XLSX.writeFile(workbook, filePath);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    // Needed so the browser's JS can read the Content-Disposition header
+    // on cross-origin responses (see CORS note below).
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.status(200).send(buffer);
 
-    res.download(filePath, fileName, (err) => {
-      if (err) {
-        console.error("Download failed:");
-        if (!res.headersSent) res.status(500).send("Failed to download file");
-      } else {
-        console.log(`Exported successfully: ${fileName}`);
-      }
-    });
-
+    console.log(`Exported successfully: ${fileName}`);
   } catch (err) {
-    console.error("Export failed completely:");
+    console.error("Export failed completely:", err);
     if (!res.headersSent) {
       res.status(500).json({
         message: "Export failed",
