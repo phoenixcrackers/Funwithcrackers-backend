@@ -4,7 +4,7 @@ const directController = require('../Controller/Direct.controller');
 
 router.get('/customers', directController.getCustomers);
 router.get('/products/types', directController.getProductTypes);
-router.get('/products', directController.getProductsByType);
+router.get('/product', directController.getProductsByType);
 router.get('/aproducts', directController.getAproductsByType);
 router.post('/bookings', directController.createBooking);
 router.post('/quotations', directController.createQuotation);

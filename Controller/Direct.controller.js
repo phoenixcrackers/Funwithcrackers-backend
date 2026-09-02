@@ -1634,6 +1634,34 @@ exports.searchQuotations = async (req, res) => {
   }
 };
 
+const cleanPlace = (val) => {
+  if (!val || val === 'N/A') return 'N/A';
+  const cleaned = String(val).replace(/[\r\n\t]+/g, ', ').replace(/\s{2,}/g, ' ').trim();
+  return cleaned || 'N/A';
+};
+
+const cleanText = (val) => {
+  if (!val || val === 'N/A') return 'N/A';
+  const cleaned = String(val).replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  return cleaned || 'N/A';
+};
+
+const applySheetFormatting = (worksheet, rows) => {
+  if (!worksheet || !rows || rows.length === 0) return;
+  const colWidths = Object.keys(rows[0]).map((key) => {
+    let maxLen = key.length;
+    for (const row of rows) {
+      const cellLen = (row[key] || "").toString().length;
+      if (cellLen > maxLen) maxLen = cellLen;
+    }
+    return { wch: Math.min(Math.max(maxLen + 4, 12), 45) };
+  });
+  worksheet["!cols"] = colWidths;
+  if (worksheet["!ref"]) {
+    worksheet["!autofilter"] = { ref: worksheet["!ref"] };
+  }
+};
+
 exports.exportQuotationsToExcel = async (req, res) => {
   let client;
   try {
@@ -1641,28 +1669,52 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
     const result = await client.query(`
       SELECT
-        quotation_id,
-        customer_name,
-        customer_type,
-        customer_id,
-        total,
-        created_at
-      FROM public.fwcquotations
-      ORDER BY created_at DESC
+        q.quotation_id,
+        q.customer_name,
+        q.customer_type,
+        q.customer_id,
+        q.total,
+        q.created_at,
+        COALESCE(NULLIF(TRIM(q.state), ''), NULLIF(TRIM(c.state), ''), 'N/A') AS state,
+        COALESCE(NULLIF(TRIM(q.district), ''), NULLIF(TRIM(c.district), ''), 'N/A') AS district,
+        COALESCE(NULLIF(TRIM(q.address), ''), NULLIF(TRIM(c.address), ''), 'N/A') AS place,
+        c2.customer_name AS agent_name
+      FROM public.fwcquotations q
+      LEFT JOIN public.customers c ON q.customer_id = c.id
+      LEFT JOIN public.customers c2 ON c.agent_id = c2.id
+      ORDER BY q.created_at DESC
     `);
 
     const quotations = result.rows;
 
+    const workbook = XLSX.utils.book_new();
+
+    // 1. All Quotations sheet with complete details and AutoFilter dropdowns
+    const allQuotationRows = quotations.map(q => ({
+      "Quotation ID": q.quotation_id || "N/A",
+      "Customer Name": q.customer_name || "N/A",
+      "Agent Name": q.agent_name || (q.customer_type === "Agent" ? q.customer_name : "N/A"),
+      "Customer Type": q.customer_type || "User",
+      "Place": cleanPlace(q.place),
+      "District": cleanText(q.district),
+      "State": cleanText(q.state),
+      "Total Amount": q.total ? `₹${Math.round(Number(q.total))}` : "₹0",
+      "Date": q.created_at ? new Date(q.created_at).toLocaleDateString('en-GB') : "N/A"
+    }));
+
+    if (allQuotationRows.length > 0) {
+      const allWs = XLSX.utils.json_to_sheet(allQuotationRows);
+      applySheetFormatting(allWs, allQuotationRows);
+      XLSX.utils.book_append_sheet(workbook, allWs, "All_Quotations");
+    }
+
     // Group by customer_type
     const grouped = quotations.reduce((acc, q) => {
       let type = q.customer_type?.trim() || "User";
-      if (type === "Customer of Selected Agent") type = "Customer of Selected Agent";
       if (!acc[type]) acc[type] = [];
       acc[type].push(q);
       return acc;
     }, {});
-
-    const workbook = XLSX.utils.book_new();
 
     const sheetConfig = [
       { type: "User", name: "User_Quotations" },
@@ -1675,45 +1727,20 @@ exports.exportQuotationsToExcel = async (req, res) => {
       let data = grouped[type] || [];
       if (data.length === 0) continue;
 
-      // Fetch Agent Name only for "Customer of Selected Agent"
-      if (type === "Customer of Selected Agent") {
-        for (let q of data) {
-          if (q.customer_id) {
-            try {
-              const agentRes = await client.query(`
-                SELECT c2.customer_name AS agent_name
-                FROM public.customers c1
-                INNER JOIN public.customers c2 ON c1.agent_id = c2.id
-                WHERE c1.id = $1
-              `, [q.customer_id]);
-              q.agent_name = agentRes.rows[0]?.agent_name || "N/A";
-            } catch (err) {
-              q.agent_name = "Error";
-            }
-          } else {
-            q.agent_name = "N/A";
-          }
-        }
-      }
-
       const rows = data.map(q => ({
         "Quotation ID": q.quotation_id || "N/A",
         "Customer Name": q.customer_name || "N/A",
+        ...(type === "Customer of Selected Agent" ? { "Agent Name": q.agent_name || "N/A" } : {}),
         "Customer Type": q.customer_type || "User",
+        "Place": cleanPlace(q.place),
+        "District": cleanText(q.district),
+        "State": cleanText(q.state),
         "Total Amount": q.total ? `₹${Math.round(Number(q.total))}` : "₹0",
-        "Date": q.created_at ? new Date(q.created_at).toLocaleDateString('en-GB') : "N/A",
-        ...(type === "Customer of Selected Agent" ? { "Agent Name": q.agent_name || "N/A" } : {})
+        "Date": q.created_at ? new Date(q.created_at).toLocaleDateString('en-GB') : "N/A"
       }));
 
       const worksheet = XLSX.utils.json_to_sheet(rows);
-      const colWidths = rows.reduce((acc, row) => {
-        Object.keys(row).forEach((key, i) => {
-          const len = (row[key] || "").toString().length;
-          acc[i] = Math.max(acc[i] || 10, len + 4);
-        });
-        return acc;
-      }, []);
-      worksheet["!cols"] = colWidths.map(w => ({ wch: w }));
+      applySheetFormatting(worksheet, rows);
 
       const safeName = name.replace(/[*?:/\\[\]]/g, "_").substring(0, 31);
       XLSX.utils.book_append_sheet(workbook, worksheet, safeName);
@@ -1763,7 +1790,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
         if (rows.length === 0) continue;
 
         const worksheet = XLSX.utils.json_to_sheet(rows);
-        worksheet["!cols"] = [{ wch: 45 }, { wch: 20 }];
+        applySheetFormatting(worksheet, rows);
 
         let baseName = agentName.replace(/[*?:/\\[\]]/g, "_").substring(0, 28);
         if (baseName.length < 3) baseName = "Agent";
@@ -1793,7 +1820,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
           .sort((a, b) => b["Total Quoted (All Agents)"] - a["Total Quoted (All Agents)"]);
 
         const allWs = XLSX.utils.json_to_sheet(allRows);
-        allWs["!cols"] = [{ wch: 50 }, { wch: 25 }];
+        applySheetFormatting(allWs, allRows);
         XLSX.utils.book_append_sheet(workbook, allWs, "All_Agents_Products");
       }
     } catch (agentErr) {
