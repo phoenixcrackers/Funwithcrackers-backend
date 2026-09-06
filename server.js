@@ -44,6 +44,15 @@ app.use('/api', require('./Router/Banner.router'));
 app.use('/api', require('./Router/Promocode.router'));
 app.use('/api', require('./Router/SalesAnalysis.router'));
 
+// Hifi Routes
+app.use('/api/hifi', require('./Router/HifiDbooking.router'));
+app.use('/api/hifi', require('./Router/HifiQuotation.router'));
+app.use('/api/hifi', require('./Router/HifiInventory.router'));
+app.use('/api/hifi', require('./Router/HifiAdmin.router'));
+app.use('/api/auth', require('./Router/HifiRegister.router'));
+app.use('/api/hifi/directcust', require('./Router/HifiDirectcust.router'));
+app.use('/api/hifi/direct', require('./Router/HifiDirect.router'));
+
 // Global error handler
 app.use((err, req, res, next) => {
   console.error('🔥 Error:', err.stack || err);
