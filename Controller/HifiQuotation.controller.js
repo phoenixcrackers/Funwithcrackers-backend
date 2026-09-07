@@ -6,7 +6,10 @@ const {
   quotationIdToOrderId,
 } = require('../utils/numberGenerator');
 const {
+  calculateModernQuotationTotal,
+  generateModernQuotationPDFBuffer,
   generateModernQuotationPDF,
+  generateModernInvoicePDFBuffer,
   generateModernInvoicePDF,
 } = require('../utils/modernPdfGenerator');
 
@@ -20,6 +23,11 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000,
   idleTimeoutMillis: 10000,
   allowExitOnIdle: true,
+});
+
+// Drop legacy foreign key constraint if present, because Hifi customers originate from gbcustomers/users
+pool.query('ALTER TABLE public.quotations DROP CONSTRAINT IF EXISTS quotations_customer_id_fkey').catch((err) => {
+  console.warn('quotations_customer_id_fkey check:', err.message);
 });
 
 exports.createQuotation = async (req, res) => {
@@ -107,12 +115,10 @@ exports.createQuotation = async (req, res) => {
     // Generate year-based sequential quotation ID: e.g. 2026QUO1
     const est_id = await generateQuotationId(pool);
 
-    const { pdfPath, calculatedTotal } = await generateModernQuotationPDF(
-      { est_id, customer_type: finalCustomerType, total, created_at: new Date() },
-      customerDetails,
-      products,
-      extra_charges || {}
-    );
+    // Calculate totals directly in memory - no need to write a PDF file to disk
+    const { subtotal, grandTotal } = calculateModernQuotationTotal(products, extra_charges || {});
+    const calculatedTotal = parseFloat(total) || grandTotal || subtotal;
+    const pdfPath = `/api/hifi/quotations/${est_id}`;
 
     const query = `
       INSERT INTO public.quotations (customer_id, est_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, extra_charges)
@@ -135,7 +141,18 @@ exports.createQuotation = async (req, res) => {
       pdfPath,
       JSON.stringify(extra_charges || {})
     ];
-    const result = await pool.query(query, values);
+    let result;
+    try {
+      result = await pool.query(query, values);
+    } catch (dbErr) {
+      if (dbErr.code === '23503' || (dbErr.message && dbErr.message.includes('quotations_customer_id_fkey'))) {
+        console.warn('Customer ID FK violation on quotations table, retrying with customer_id = null while preserving all customer details');
+        values[0] = null;
+        result = await pool.query(query, values);
+      } else {
+        throw dbErr;
+      }
+    }
 
     res.status(201).json({
       message: 'Quotation created successfully',
@@ -198,12 +215,10 @@ exports.editQuotation = async (req, res) => {
       }
     }
 
-    const { pdfPath, calculatedTotal } = await generateModernQuotationPDF(
-      { est_id, customer_type, total, created_at },
-      { customer_name, address, mobile_number, email, district, state },
-      products,
-      extra_charges || {}
-    );
+    // Calculate totals directly in memory - no disk write
+    const { subtotal, grandTotal } = calculateModernQuotationTotal(products, extra_charges || {});
+    const calculatedTotal = parseFloat(total) || grandTotal || subtotal;
+    const pdfPath = `/api/hifi/quotations/${est_id}`;
 
     const query = `
       UPDATE public.quotations
@@ -304,20 +319,18 @@ exports.getQuotation = async (req, res) => {
       parsedExtras = {};
     }
 
-    // Always generate modern PDF to guarantee consistent luxury layout
-    const generated = await generateModernQuotationPDF(
+    // Generate modern PDF dynamically as in-memory buffer (zero disk writes, cloud/serverless safe)
+    const { buffer } = await generateModernQuotationPDFBuffer(
       { est_id: foundEstId, customer_type, total, created_at },
       { customer_name, address, mobile_number, email, district, state },
       parsedProducts,
       parsedExtras
     );
-    const currentPdfPath = generated.pdfPath;
-    await pool.query('UPDATE public.quotations SET pdf = $1 WHERE est_id = $2', [currentPdfPath, foundEstId]);
 
     const safeCustomer = (customer_name || 'customer').toLowerCase().replace(/[^a-z0-9]+/g, '_');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=${safeCustomer}-${foundEstId}.pdf`);
-    fs.createReadStream(currentPdfPath).pipe(res);
+    res.send(buffer);
   } catch (err) {
     console.error('Error fetching quotation PDF:', err);
     res.status(500).json({ message: 'Failed to fetch quotation', error: err.message });
@@ -422,13 +435,7 @@ exports.bookQuotation = async (req, res) => {
       await client.query(`UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`, [quantity, id]);
     }
 
-    // Generate modern invoice PDF
-    const pdfResult = await generateModernInvoicePDF(
-      { order_id, customer_type: finalCustomerType, total, est_id, created_at: new Date() },
-      customerDetails,
-      products,
-      extra_charges || (dbRow.extra_charges ? JSON.parse(dbRow.extra_charges) : {})
-    );
+    const pdfPath = `/api/hifi/direct/invoice/${order_id}`;
 
     const query = `
       INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, extra_charges)
@@ -448,10 +455,21 @@ exports.bookQuotation = async (req, res) => {
       customerDetails.state || null,
       finalCustomerType,
       'booked',
-      pdfResult.pdfPath,
+      pdfPath,
       JSON.stringify(extra_charges || {})
     ];
-    const result = await client.query(query, values);
+    let result;
+    try {
+      result = await client.query(query, values);
+    } catch (bookingDbErr) {
+      if (bookingDbErr.code === '23503' || (bookingDbErr.message && bookingDbErr.message.includes('customer_id'))) {
+        console.warn('Customer ID FK violation on dbooking table, retrying with customer_id = null while preserving all customer details');
+        values[0] = null;
+        result = await client.query(query, values);
+      } else {
+        throw bookingDbErr;
+      }
+    }
 
     await client.query('UPDATE public.quotations SET status = $1 WHERE est_id = $2', ['booked', est_id]);
 

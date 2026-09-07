@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 const { generateOrderId } = require('../utils/numberGenerator');
-const { generateModernInvoicePDF } = require('../utils/modernPdfGenerator');
+const { generateModernInvoicePDF, generateModernInvoicePDFBuffer } = require('../utils/modernPdfGenerator');
 
 const pool = new Pool({
   user: process.env.PGUSER,
@@ -15,6 +15,8 @@ const pool = new Pool({
   idleTimeoutMillis: 10000,
   allowExitOnIdle: true,
 });
+
+pool.query('ALTER TABLE public.dbooking DROP CONSTRAINT IF EXISTS dbooking_customer_id_fkey').catch(() => {});
 
 exports.getCustomers = async (req, res) => {
   try {
@@ -143,12 +145,7 @@ exports.createBooking = async (req, res) => {
       await pool.query(`UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`, [quantity, id]);
     }
 
-    const pdfResult = await generateModernInvoicePDF(
-      { order_id, customer_type: finalCustomerType, total, created_at: new Date() },
-      customerDetails,
-      products,
-      extra_charges || {}
-    );
+    const pdfPath = `/api/hifi/direct/invoice/${order_id}`;
 
     const bookingQuery = `
       INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, payment_method, amount_paid, admin_id, extra_charges)
@@ -160,10 +157,21 @@ exports.createBooking = async (req, res) => {
       customerDetails.address || null, customerDetails.mobile_number || null,
       customerDetails.customer_name || null, customerDetails.email || null,
       customerDetails.district || null, customerDetails.state || null,
-      finalCustomerType, 'booked', pdfResult.pdfPath, payment_method || null, parseFloat(amount_paid) || 0, admin_id || null,
+      finalCustomerType, 'booked', pdfPath, payment_method || null, parseFloat(amount_paid) || 0, admin_id || null,
       JSON.stringify(extra_charges || {})
     ];
-    const bookingResult = await pool.query(bookingQuery, bookingValues);
+    let bookingResult;
+    try {
+      bookingResult = await pool.query(bookingQuery, bookingValues);
+    } catch (bookingDbErr) {
+      if (bookingDbErr.code === '23503' || (bookingDbErr.message && bookingDbErr.message.includes('customer_id'))) {
+        console.warn('Customer ID FK violation on dbooking table, retrying with customer_id = null while preserving all customer details');
+        bookingValues[0] = null;
+        bookingResult = await pool.query(bookingQuery, bookingValues);
+      } else {
+        throw bookingDbErr;
+      }
+    }
 
     if (payment_method && amount_paid) {
       const transactionQuery = `
@@ -232,31 +240,26 @@ exports.getInvoice = async (req, res) => {
 
     const { products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf, order_id: foundOrderId, extra_charges, created_at } = bookingQuery.rows[0];
 
-    let currentPdfPath = pdf;
-    if (!currentPdfPath || !fs.existsSync(currentPdfPath)) {
-      let parsedProducts = [];
-      try {
-        parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
-      } catch {
-        parsedProducts = [];
-      }
-
-      let parsedExtras = {};
-      try {
-        parsedExtras = typeof extra_charges === 'string' ? JSON.parse(extra_charges) : (extra_charges || {});
-      } catch {
-        parsedExtras = {};
-      }
-
-      const regenerated = await generateModernInvoicePDF(
-        { order_id: foundOrderId, customer_type, total, created_at },
-        { customer_name, address, mobile_number, email, district, state },
-        parsedProducts,
-        parsedExtras
-      );
-      currentPdfPath = regenerated.pdfPath;
-      await pool.query('UPDATE public.dbooking SET pdf = $1 WHERE order_id = $2', [currentPdfPath, foundOrderId]);
+    let parsedProducts = [];
+    try {
+      parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+    } catch {
+      parsedProducts = [];
     }
+
+    let parsedExtras = {};
+    try {
+      parsedExtras = typeof extra_charges === 'string' ? JSON.parse(extra_charges) : (extra_charges || {});
+    } catch {
+      parsedExtras = {};
+    }
+
+    const { buffer } = await generateModernInvoicePDFBuffer(
+      { order_id: foundOrderId, customer_type, total, created_at },
+      { customer_name, address, mobile_number, email, district, state },
+      parsedProducts,
+      parsedExtras
+    );
 
     const safeCustomerName = (customer_name || 'customer')
       .toLowerCase()
@@ -264,7 +267,7 @@ exports.getInvoice = async (req, res) => {
       .replace(/^_+|_+$/g, '');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=${safeCustomerName}-${foundOrderId}.pdf`);
-    fs.createReadStream(currentPdfPath).pipe(res);
+    res.send(buffer);
   } catch (err) {
     console.error('Error in Direct getInvoice:', err);
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });

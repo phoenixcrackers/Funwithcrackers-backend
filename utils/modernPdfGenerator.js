@@ -1,6 +1,7 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 // Design Tokens & Colors
 const COLORS = {
@@ -49,9 +50,41 @@ function formatDate(date) {
 }
 
 function ensureDir(dirPath) {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+  } catch (err) {
+    // Ignore directory creation failure in read-only filesystems
   }
+}
+
+function getSafePdfDir(subfolder = '') {
+  const baseDir = process.env.PDF_STORAGE_DIR || path.join(os.tmpdir(), 'hifi_pdf');
+  const targetDir = subfolder ? path.join(baseDir, subfolder) : baseDir;
+  ensureDir(targetDir);
+  return targetDir;
+}
+
+function calculateModernQuotationTotal(products, extraCharges = {}) {
+  let subtotal = 0;
+  if (Array.isArray(products)) {
+    for (const prod of products) {
+      const price = Number(prod.price) || 0;
+      const discount = Number(prod.discount) || 0;
+      const qty = Number(prod.quantity) || 0;
+      const lineTotal = (price - (price * discount / 100)) * qty;
+      subtotal += lineTotal;
+    }
+  }
+  const tax = parseFloat(extraCharges.tax || 0);
+  const pf = parseFloat(extraCharges.pf || 0);
+  const minus = parseFloat(extraCharges.minus || 0);
+  const grandTotal = subtotal + tax + pf - minus;
+  return {
+    subtotal: Math.round(subtotal * 100) / 100,
+    grandTotal: Math.round(grandTotal * 100) / 100,
+  };
 }
 
 /**
@@ -382,9 +415,9 @@ function drawFooterSection(doc, currentY, subtotal, extraCharges = {}) {
 }
 
 /**
- * Generate Modern Quotation PDF
+ * Generate Modern Quotation PDF as in-memory Buffer (no disk write required)
  */
-function generateModernQuotationPDF(quotationData, customerDetails, products, extraCharges = {}) {
+function generateModernQuotationPDFBuffer(quotationData, customerDetails, products, extraCharges = {}) {
   return new Promise((resolve, reject) => {
     try {
       if (!quotationData || !customerDetails || !Array.isArray(products)) {
@@ -392,17 +425,8 @@ function generateModernQuotationPDF(quotationData, customerDetails, products, ex
       }
 
       const doc = new PDFDocument({ margin: 40, size: 'A4' });
-      const safeCustomerName = (customerDetails.customer_name || customerDetails.name || 'unknown')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '_')
-        .replace(/^_+|_+$/g, '');
-
-      const pdfDir = path.join(__dirname, '../Controller/quotation');
-      ensureDir(pdfDir);
-
-      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${quotationData.est_id || 'quo'}.pdf`);
-      const stream = fs.createWriteStream(pdfPath);
-      doc.pipe(stream);
+      const buffers = [];
+      doc.on('data', buffers.push.bind(buffers));
 
       // Draw Top Header
       drawHeader(doc, 'QUOTATION', quotationData.est_id || 'QUO', quotationData.created_at || new Date(), 'PENDING');
@@ -421,9 +445,13 @@ function generateModernQuotationPDF(quotationData, customerDetails, products, ex
       // Draw Summary & Footer
       drawFooterSection(doc, currentY, calculatedSubtotal, extraCharges);
 
+      doc.on('end', () => {
+        const buffer = Buffer.concat(buffers);
+        resolve({ buffer, calculatedTotal: calculatedSubtotal });
+      });
+      doc.on('error', reject);
+
       doc.end();
-      stream.on('finish', () => resolve({ pdfPath, calculatedTotal: calculatedSubtotal }));
-      stream.on('error', reject);
     } catch (err) {
       reject(err);
     }
@@ -431,9 +459,37 @@ function generateModernQuotationPDF(quotationData, customerDetails, products, ex
 }
 
 /**
- * Generate Modern Invoice / Order Bill PDF
+ * Generate Modern Quotation PDF (writes to safe directory, e.g. os.tmpdir(), without crashing on read-only environments)
  */
-function generateModernInvoicePDF(bookingData, customerDetails, products, extraCharges = {}) {
+function generateModernQuotationPDF(quotationData, customerDetails, products, extraCharges = {}) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const { buffer, calculatedTotal } = await generateModernQuotationPDFBuffer(quotationData, customerDetails, products, extraCharges);
+      const safeCustomerName = (customerDetails.customer_name || customerDetails.name || 'unknown')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+      const pdfDir = getSafePdfDir('quotation');
+      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${quotationData.est_id || 'quo'}.pdf`);
+
+      try {
+        fs.writeFileSync(pdfPath, buffer);
+      } catch (writeErr) {
+        console.warn('Could not write quotation PDF to disk (read-only filesystem):', writeErr.message);
+      }
+
+      resolve({ pdfPath, calculatedTotal, buffer });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Generate Modern Invoice / Order Bill PDF as in-memory Buffer (no disk write required)
+ */
+function generateModernInvoicePDFBuffer(bookingData, customerDetails, products, extraCharges = {}) {
   return new Promise((resolve, reject) => {
     try {
       if (!bookingData || !customerDetails || !Array.isArray(products)) {
@@ -441,17 +497,8 @@ function generateModernInvoicePDF(bookingData, customerDetails, products, extraC
       }
 
       const doc = new PDFDocument({ margin: 40, size: 'A4' });
-      const safeCustomerName = (customerDetails.customer_name || customerDetails.name || 'unknown')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '_')
-        .replace(/^_+|_+$/g, '');
-
-      const pdfDir = path.join(__dirname, '../Controller/pdf_data');
-      ensureDir(pdfDir);
-
-      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${bookingData.order_id || 'ord'}.pdf`);
-      const stream = fs.createWriteStream(pdfPath);
-      doc.pipe(stream);
+      const buffers = [];
+      doc.on('data', buffers.push.bind(buffers));
 
       // Draw Top Header
       drawHeader(doc, 'TAX INVOICE', bookingData.order_id || 'ORD', bookingData.created_at || new Date(), bookingData.status || 'BOOKED');
@@ -471,9 +518,13 @@ function generateModernInvoicePDF(bookingData, customerDetails, products, extraC
       // Draw Summary & Footer
       drawFooterSection(doc, currentY, calculatedSubtotal, extraCharges);
 
+      doc.on('end', () => {
+        const buffer = Buffer.concat(buffers);
+        resolve({ buffer, calculatedTotal: calculatedSubtotal });
+      });
+      doc.on('error', reject);
+
       doc.end();
-      stream.on('finish', () => resolve({ pdfPath, calculatedTotal: calculatedSubtotal }));
-      stream.on('error', reject);
     } catch (err) {
       reject(err);
     }
@@ -481,24 +532,44 @@ function generateModernInvoicePDF(bookingData, customerDetails, products, extraC
 }
 
 /**
- * Generate Modern Payment Receipt PDF
+ * Generate Modern Invoice / Order Bill PDF (writes to safe directory, e.g. os.tmpdir(), without crashing on read-only environments)
  */
-function generateModernReceiptPDF(bookingData, customerDetails, payments = [], receiptId = '') {
-  return new Promise((resolve, reject) => {
+function generateModernInvoicePDF(bookingData, customerDetails, products, extraCharges = {}) {
+  return new Promise(async (resolve, reject) => {
     try {
-      const doc = new PDFDocument({ margin: 40, size: 'A4' });
+      const { buffer, calculatedTotal } = await generateModernInvoicePDFBuffer(bookingData, customerDetails, products, extraCharges);
       const safeCustomerName = (customerDetails.customer_name || customerDetails.name || 'unknown')
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '');
 
-      const pdfDir = path.join(__dirname, '../Controller/receipt');
-      ensureDir(pdfDir);
+      const pdfDir = getSafePdfDir('pdf_data');
+      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${bookingData.order_id || 'ord'}.pdf`);
+
+      try {
+        fs.writeFileSync(pdfPath, buffer);
+      } catch (writeErr) {
+        console.warn('Could not write invoice PDF to disk (read-only filesystem):', writeErr.message);
+      }
+
+      resolve({ pdfPath, calculatedTotal, buffer });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Generate Modern Payment Receipt PDF as in-memory Buffer (no disk write required)
+ */
+function generateModernReceiptPDFBuffer(bookingData, customerDetails, payments = [], receiptId = '') {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ margin: 40, size: 'A4' });
+      const buffers = [];
+      doc.on('data', buffers.push.bind(buffers));
 
       const genReceiptId = receiptId || `RCP-${Date.now()}`;
-      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${genReceiptId}.pdf`);
-      const stream = fs.createWriteStream(pdfPath);
-      doc.pipe(stream);
 
       // Draw Header
       drawHeader(doc, 'PAYMENT RECEIPT', genReceiptId, new Date(), 'PAID');
@@ -552,9 +623,41 @@ function generateModernReceiptPDF(bookingData, customerDetails, payments = [], r
       doc.moveTo(555.28 - 140, sigY + 28).lineTo(555.28, sigY + 28).strokeColor(COLORS.borderDark).stroke();
       doc.fillColor(COLORS.primary).font('Helvetica-Bold').fontSize(8.5).text(`For ${COMPANY.name}`, 555.28 - 140, sigY + 12, { width: 140, align: 'center' });
 
+      doc.on('end', () => {
+        const buffer = Buffer.concat(buffers);
+        resolve({ buffer, calculatedTotal: totalPaid, receiptId: genReceiptId });
+      });
+      doc.on('error', reject);
+
       doc.end();
-      stream.on('finish', () => resolve({ pdfPath, calculatedTotal: totalPaid, receiptId: genReceiptId }));
-      stream.on('error', reject);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Generate Modern Payment Receipt PDF (writes to safe directory, e.g. os.tmpdir(), without crashing on read-only environments)
+ */
+function generateModernReceiptPDF(bookingData, customerDetails, payments = [], receiptId = '') {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const { buffer, calculatedTotal, receiptId: genReceiptId } = await generateModernReceiptPDFBuffer(bookingData, customerDetails, payments, receiptId);
+      const safeCustomerName = (customerDetails.customer_name || customerDetails.name || 'unknown')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+      const pdfDir = getSafePdfDir('receipt');
+      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${genReceiptId}.pdf`);
+
+      try {
+        fs.writeFileSync(pdfPath, buffer);
+      } catch (writeErr) {
+        console.warn('Could not write receipt PDF to disk (read-only filesystem):', writeErr.message);
+      }
+
+      resolve({ pdfPath, calculatedTotal, receiptId: genReceiptId, buffer });
     } catch (err) {
       reject(err);
     }
@@ -562,8 +665,12 @@ function generateModernReceiptPDF(bookingData, customerDetails, payments = [], r
 }
 
 module.exports = {
+  calculateModernQuotationTotal,
+  generateModernQuotationPDFBuffer,
   generateModernQuotationPDF,
+  generateModernInvoicePDFBuffer,
   generateModernInvoicePDF,
+  generateModernReceiptPDFBuffer,
   generateModernReceiptPDF,
   COMPANY,
   COLORS,

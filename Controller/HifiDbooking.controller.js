@@ -1,10 +1,24 @@
 const { Pool } = require("pg")
 const fs = require("fs")
 const path = require("path")
+const os = require("os")
 const PDFDocument = require("pdfkit")
 const multer = require("multer")
 const { generateOrderId } = require("../utils/numberGenerator")
-const { generateModernInvoicePDF, generateModernReceiptPDF } = require("../utils/modernPdfGenerator")
+const {
+  generateModernInvoicePDF,
+  generateModernInvoicePDFBuffer,
+  generateModernReceiptPDF,
+  generateModernReceiptPDFBuffer,
+} = require("../utils/modernPdfGenerator")
+
+const getSafeReceiptDir = (sub = "receipt") => {
+  const dir = process.env.PDF_STORAGE_DIR || path.join(os.tmpdir(), "hifi_pdf", sub);
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (_) {}
+  return dir;
+};
 
 const pool = new Pool({
   user: process.env.PGUSER,
@@ -20,8 +34,7 @@ const pool = new Pool({
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const pdfDir = path.join(__dirname, "../pdf_data")
-    fs.mkdirSync(pdfDir, { recursive: true })
+    const pdfDir = getSafeReceiptDir("pdf_data")
     cb(null, pdfDir)
   },
   filename: (req, file, cb) => {
@@ -90,10 +103,7 @@ const generateReceiptPDF = (
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "")
     const receiptId = generateReceiptId()
-    const pdfDir = path.join(__dirname, "receipt")
-    if (!fs.existsSync(pdfDir)) {
-      fs.mkdirSync(pdfDir, { recursive: true })
-    }
+    const pdfDir = getSafeReceiptDir("receipt")
     const pdfPath = path.join(pdfDir, `${safeName}-${receiptId}.pdf`)
     const stream = fs.createWriteStream(pdfPath)
     doc.pipe(stream)
@@ -364,10 +374,7 @@ const generateInvoicePDF = (
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "")
-    const pdfDir = path.join(__dirname, "receipt")
-    if (!fs.existsSync(pdfDir)) {
-      fs.mkdirSync(pdfDir, { recursive: true })
-    }
+    const pdfDir = getSafeReceiptDir("receipt")
     const pdfPath = path.join(pdfDir, `${safeName}-${bookingData.order_id || "unknown"}-receipt.pdf`)
     const stream = fs.createWriteStream(pdfPath)
     doc.pipe(stream)
@@ -1028,18 +1035,11 @@ exports.createBooking = async (req, res) => {
       await pool.query(`UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`, [quantity, id]);
     }
 
-    // Generate Modern Invoice PDF
-    const { pdfPath } = await generateModernInvoicePDF(
-      { order_id, customer_type: finalCustomerType, total, created_at: new Date() },
-      customerDetails,
-      products,
-    );
+    const pdfPath = `/api/hifi/direct/invoice/${order_id}`;
 
-    // Insert booking
-    const { rows } = await pool.query(
-      `INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, payment_method, amount_paid, admin_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'booked', NOW(), $12, $13, $14, $15) RETURNING id, created_at, customer_type, pdf, order_id`,
-      [
+    const bookingQuery = `INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, payment_method, amount_paid, admin_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'booked', NOW(), $12, $13, $14, $15) RETURNING id, created_at, customer_type, pdf, order_id`;
+    const bookingValues = [
         customer_id || null,
         order_id,
         JSON.stringify(products),
@@ -1055,8 +1055,20 @@ exports.createBooking = async (req, res) => {
         payment_method || null,
         Number.parseFloat(amount_paid) || 0,
         admin_id || null,
-      ],
-    );
+    ];
+    let rows;
+    try {
+      const res = await pool.query(bookingQuery, bookingValues);
+      rows = res.rows;
+    } catch (bookingDbErr) {
+      if (bookingDbErr.code === '23503' || (bookingDbErr.message && bookingDbErr.message.includes('customer_id'))) {
+        bookingValues[0] = null;
+        const res = await pool.query(bookingQuery, bookingValues);
+        rows = res.rows;
+      } else {
+        throw bookingDbErr;
+      }
+    }
 
     // Insert payment transaction if applicable
     if (payment_method && amount_paid) {
@@ -1106,23 +1118,18 @@ exports.getInvoice = async (req, res) => {
       pdf,
       order_id: actualOrderId,
     } = rows[0]
-    let currentPdfPath = pdf
-    if (!currentPdfPath || !fs.existsSync(currentPdfPath)) {
-      const { pdfPath } = await generateModernInvoicePDF(
-        { order_id: actualOrderId, customer_type, total },
-        { customer_name, address, mobile_number, email, district, state },
-        JSON.parse(products),
-      )
-      currentPdfPath = pdfPath
-      await pool.query("UPDATE public.dbooking SET pdf = $1 WHERE order_id = $2", [currentPdfPath, actualOrderId])
-    }
+    const { buffer } = await generateModernInvoicePDFBuffer(
+      { order_id: actualOrderId, customer_type, total },
+      { customer_name, address, mobile_number, email, district, state },
+      typeof products === "string" ? JSON.parse(products) : products,
+    )
     const safeName = (customer_name || 'customer')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "")
     res.setHeader("Content-Type", "application/pdf")
     res.setHeader("Content-Disposition", `inline; filename=${safeName}-${actualOrderId}.pdf`)
-    fs.createReadStream(currentPdfPath).pipe(res)
+    res.send(buffer)
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch invoice", error: err.message })
   }
