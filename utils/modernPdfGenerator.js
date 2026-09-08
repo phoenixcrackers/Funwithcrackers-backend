@@ -26,13 +26,6 @@ const COMPANY = {
   address: 'Opp. Anil Kumar Eye Hospital, Sattur Road, Sivakasi - 626 123, Tamil Nadu',
   mobile: '+91 97865 08621, +91 97868 60010',
   email: 'nivasramasamy27@gmail.com',
-  bankDetails: {
-    accountName: 'HIFI PYRO PARK',
-    bankName: 'State Bank of India',
-    accountNumber: '38920194829',
-    ifscCode: 'SBIN0000921',
-    branch: 'Sivakasi Main Branch',
-  },
 };
 
 function formatCurrency(num) {
@@ -301,11 +294,11 @@ function drawProductsTable(doc, products, startY, hasDiscount) {
 }
 
 /**
- * Draw Summary, Grand Total, Bank Details, and Footer
+ * Draw Summary, Grand Total, Thank You & Safe Diwali Statements, and Footer
  */
 function drawFooterSection(doc, currentY, subtotal, extraCharges = {}) {
   let y = currentY;
-  if (y > 640) {
+  if (y > 630) {
     doc.addPage();
     y = 60;
   }
@@ -315,30 +308,45 @@ function drawFooterSection(doc, currentY, subtotal, extraCharges = {}) {
   const minus = parseFloat(extraCharges.minus || 0);
   const grandTotal = subtotal + tax + pf - minus;
 
-  // Left Side: Bank Details & Terms Card
+  // Left Side: Customer Appreciation & Safe Diwali Guidelines Card
   const leftX = 40;
-  const leftWidth = 260;
-  doc.roundedRect(leftX, y, leftWidth, 90, 4).fillAndStroke(COLORS.bgLight, COLORS.border);
+  const leftWidth = 265;
+  const cardHeight = 98;
+  doc.roundedRect(leftX, y, leftWidth, cardHeight, 4).fillAndStroke(COLORS.bgLight, COLORS.border);
 
+  // Thank the Customer
+  doc
+    .fillColor(COLORS.gold)
+    .font('Helvetica-Bold')
+    .fontSize(8.5)
+    .text('THANK YOU FOR YOUR VALUED BUSINESS!', leftX + 10, y + 8);
+
+  doc
+    .fillColor(COLORS.primary)
+    .font('Helvetica-Bold')
+    .fontSize(7.5)
+    .text('We truly appreciate your trust and patronage with us.', leftX + 10, y + 20);
+
+  // Safe Diwali Statements
   doc
     .fillColor(COLORS.accent)
     .font('Helvetica-Bold')
-    .fontSize(8)
-    .text('BANK DETAILS FOR PAYMENT', leftX + 10, y + 8);
+    .fontSize(7.5)
+    .text('SAFE & SPARKLING DIWALI GUIDELINES:', leftX + 10, y + 33);
 
   doc
     .fillColor(COLORS.textMain)
     .font('Helvetica')
-    .fontSize(8)
-    .text(`A/C Name: ${COMPANY.bankDetails.accountName}`, leftX + 10, y + 22)
-    .text(`Bank: ${COMPANY.bankDetails.bankName}`, leftX + 10, y + 33)
-    .text(`A/C No: ${COMPANY.bankDetails.accountNumber}`, leftX + 10, y + 44)
-    .text(`IFSC: ${COMPANY.bankDetails.ifscCode}  |  Branch: ${COMPANY.bankDetails.branch}`, leftX + 10, y + 55);
+    .fontSize(6.8)
+    .text('• Light crackers in open outdoor areas under adult supervision.', leftX + 10, y + 45, { width: leftWidth - 20 })
+    .text('• Keep buckets of water and sand ready nearby for safety.', leftX + 10, y + 55, { width: leftWidth - 20 })
+    .text('• Wear fitted cotton clothes and maintain safe distance.', leftX + 10, y + 65, { width: leftWidth - 20 })
+    .text('• Never attempt to relight unexploded or dud fireworks.', leftX + 10, y + 75, { width: leftWidth - 20 });
 
   doc
     .fillColor(COLORS.textMuted)
-    .fontSize(7.5)
-    .text('* Subject to Sivakasi Jurisdiction. Goods once sold will not be returned.', leftX + 10, y + 74);
+    .fontSize(6.5)
+    .text('* Subject to Sivakasi Jurisdiction. Goods once sold will not be returned.', leftX + 10, y + 87);
 
   // Right Side: Breakdown & Grand Total
   const rightX = 320;
@@ -384,7 +392,7 @@ function drawFooterSection(doc, currentY, subtotal, extraCharges = {}) {
     .text(formatCurrency(grandTotal), rightX, rowY + 8, { width: rightWidth - 10, align: 'right' });
 
   // Signature Block
-  const sigY = y + 105;
+  const sigY = Math.max(rowY + 38, y + 108);
   doc
     .fillColor(COLORS.textMuted)
     .font('Helvetica')
@@ -407,7 +415,7 @@ function drawFooterSection(doc, currentY, subtotal, extraCharges = {}) {
     .font('Helvetica')
     .fontSize(7.5)
     .text(
-      'Thank you for partnering with HIFI PYRO PARK! Celebrate every festival safely.',
+      'Thank you for partnering with HIFI PYRO PARK! Wishing you a joyous, prosperous & safe Diwali celebration.',
       40,
       footerY,
       { width: 515.28, align: 'center' }
@@ -617,11 +625,55 @@ function generateModernReceiptPDFBuffer(bookingData, customerDetails, payments =
       doc.fillColor(COLORS.gold).font('Helvetica-Bold').fontSize(10).text('TOTAL RECEIVED:', 312, summaryY + 9);
       doc.fillColor(COLORS.white).font('Helvetica-Bold').fontSize(12).text(formatCurrency(totalPaid), 312, summaryY + 8, { width: 233, align: 'right' });
 
+      // Left Side: Customer Appreciation & Safe Diwali Card
+      const leftX = 40;
+      const leftWidth = 250;
+      doc.roundedRect(leftX, summaryY, leftWidth, 72, 4).fillAndStroke(COLORS.bgLight, COLORS.border);
+
+      doc
+        .fillColor(COLORS.gold)
+        .font('Helvetica-Bold')
+        .fontSize(8.5)
+        .text('THANK YOU FOR YOUR PAYMENT!', leftX + 10, summaryY + 8);
+
+      doc
+        .fillColor(COLORS.primary)
+        .font('Helvetica')
+        .fontSize(7.5)
+        .text('We sincerely thank you for your business and trust in HIFI PYRO PARK.', leftX + 10, summaryY + 21, { width: leftWidth - 20 });
+
+      doc
+        .fillColor(COLORS.accent)
+        .font('Helvetica-Bold')
+        .fontSize(7.5)
+        .text('HAVE A SAFE & SPARKLING DIWALI!', leftX + 10, summaryY + 39);
+
+      doc
+        .fillColor(COLORS.textMuted)
+        .font('Helvetica')
+        .fontSize(7)
+        .text('• Handle fireworks responsibly & celebrate safely with loved ones.', leftX + 10, summaryY + 51, { width: leftWidth - 20 })
+        .text('• Maintain adult supervision at all times.', leftX + 10, summaryY + 61, { width: leftWidth - 20 });
+
       // Signatory
-      const sigY = summaryY + 50;
+      const sigY = summaryY + 80;
       doc.fillColor(COLORS.textMuted).font('Helvetica').fontSize(8).text('Authorized Signatory', 555.28 - 140, sigY + 30, { width: 140, align: 'center' });
       doc.moveTo(555.28 - 140, sigY + 28).lineTo(555.28, sigY + 28).strokeColor(COLORS.borderDark).stroke();
       doc.fillColor(COLORS.primary).font('Helvetica-Bold').fontSize(8.5).text(`For ${COMPANY.name}`, 555.28 - 140, sigY + 12, { width: 140, align: 'center' });
+
+      // Page Bottom Brand Footer
+      const footerY = 800;
+      doc.rect(0, footerY + 12, 595.28, 4).fill(COLORS.primary);
+      doc
+        .fillColor(COLORS.textMuted)
+        .font('Helvetica')
+        .fontSize(7.5)
+        .text(
+          'Thank you for partnering with HIFI PYRO PARK! Celebrate a Safe, Joyful & Eco-friendly Diwali.',
+          40,
+          footerY,
+          { width: 515.28, align: 'center' }
+        );
 
       doc.on('end', () => {
         const buffer = Buffer.concat(buffers);
