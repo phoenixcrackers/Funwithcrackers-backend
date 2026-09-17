@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 const { generateOrderId } = require('../utils/numberGenerator');
-const { generateModernInvoicePDF, generateModernInvoicePDFBuffer } = require('../utils/modernPdfGenerator');
+const { generateModernInvoicePDF } = require('../utils/modernPdfGenerator');
 
 const pool = new Pool({
   user: process.env.PGUSER,
@@ -15,8 +15,6 @@ const pool = new Pool({
   idleTimeoutMillis: 10000,
   allowExitOnIdle: true,
 });
-
-pool.query('ALTER TABLE public.dbooking DROP CONSTRAINT IF EXISTS dbooking_customer_id_fkey').catch(() => {});
 
 exports.getCustomers = async (req, res) => {
   try {
@@ -59,7 +57,7 @@ exports.getProductsByType = async (req, res) => {
       WHERE status = 'on'
     `;
     const result = await pool.query(query, [productType]);
-    
+
     const products = result.rows.map(row => ({
       id: row.id,
       product_type: row.product_type,
@@ -71,7 +69,7 @@ exports.getProductsByType = async (req, res) => {
       image: row.image,
       status: row.status
     }));
-    
+
     res.status(200).json(products);
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch products', error: err.message });
@@ -145,7 +143,12 @@ exports.createBooking = async (req, res) => {
       await pool.query(`UPDATE public.${tableName} SET stock = stock - $1 WHERE id = $2`, [quantity, id]);
     }
 
-    const pdfPath = `/api/hifi/direct/invoice/${order_id}`;
+    const pdfResult = await generateModernInvoicePDF(
+      { order_id, customer_type: finalCustomerType, total, created_at: new Date() },
+      customerDetails,
+      products,
+      extra_charges || {}
+    );
 
     const bookingQuery = `
       INSERT INTO public.dbooking (customer_id, order_id, products, total, address, mobile_number, customer_name, email, district, state, customer_type, status, created_at, pdf, payment_method, amount_paid, admin_id, extra_charges)
@@ -157,21 +160,10 @@ exports.createBooking = async (req, res) => {
       customerDetails.address || null, customerDetails.mobile_number || null,
       customerDetails.customer_name || null, customerDetails.email || null,
       customerDetails.district || null, customerDetails.state || null,
-      finalCustomerType, 'booked', pdfPath, payment_method || null, parseFloat(amount_paid) || 0, admin_id || null,
+      finalCustomerType, 'booked', pdfResult.pdfPath, payment_method || null, parseFloat(amount_paid) || 0, admin_id || null,
       JSON.stringify(extra_charges || {})
     ];
-    let bookingResult;
-    try {
-      bookingResult = await pool.query(bookingQuery, bookingValues);
-    } catch (bookingDbErr) {
-      if (bookingDbErr.code === '23503' || (bookingDbErr.message && bookingDbErr.message.includes('customer_id'))) {
-        console.warn('Customer ID FK violation on dbooking table, retrying with customer_id = null while preserving all customer details');
-        bookingValues[0] = null;
-        bookingResult = await pool.query(bookingQuery, bookingValues);
-      } else {
-        throw bookingDbErr;
-      }
-    }
+    const bookingResult = await pool.query(bookingQuery, bookingValues);
 
     if (payment_method && amount_paid) {
       const transactionQuery = `
@@ -216,7 +208,7 @@ exports.getInvoice = async (req, res) => {
     }
 
     let bookingQuery = await pool.query(
-      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf, order_id, extra_charges, created_at FROM public.dbooking WHERE order_id = $1',
+      'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf, order_id, customer_id, extra_charges, created_at, status FROM public.dbooking WHERE order_id = $1',
       [order_id]
     );
 
@@ -225,7 +217,7 @@ exports.getInvoice = async (req, res) => {
       if (parts.length > 1) {
         const possibleOrderId = parts.slice(1).join('-');
         bookingQuery = await pool.query(
-          'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf, order_id, extra_charges, created_at FROM public.dbooking WHERE order_id = $1',
+          'SELECT products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf, order_id, customer_id, extra_charges, created_at, status FROM public.dbooking WHERE order_id = $1',
           [`DORD-${possibleOrderId}`]
         );
       }
@@ -238,36 +230,134 @@ exports.getInvoice = async (req, res) => {
       });
     }
 
-    const { products, total, customer_name, address, mobile_number, email, district, state, customer_type, pdf, order_id: foundOrderId, extra_charges, created_at } = bookingQuery.rows[0];
+    let {
+      products,
+      total,
+      customer_name,
+      address,
+      mobile_number,
+      email,
+      district,
+      state,
+      customer_type,
+      pdf,
+      order_id: foundOrderId,
+      customer_id,
+      extra_charges,
+      created_at,
+      status
+    } = bookingQuery.rows[0];
 
-    let parsedProducts = [];
+    let currentPdfPath = pdf;
+    let forceRegenerate = req.query.fresh === 'true';
+
+    // If customer_id exists or was passed in query, or can be matched via mobile/name, check gbcustomers
+    let matchedCustId = req.query.customer_id || customer_id;
+    let latestCustomer = null;
+
     try {
-      parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
-    } catch {
-      parsedProducts = [];
+      if (matchedCustId) {
+        const custCheck = await pool.query(
+          "SELECT id, customer_name, mobile_number, address, district, state, email, customer_type FROM public.gbcustomers WHERE id = $1",
+          [matchedCustId]
+        );
+        if (custCheck.rows.length > 0) {
+          latestCustomer = custCheck.rows[0];
+        }
+      }
+
+      if (!latestCustomer && (mobile_number || customer_name)) {
+        const custFallback = await pool.query(
+          `SELECT id, customer_name, mobile_number, address, district, state, email, customer_type 
+           FROM public.gbcustomers 
+           WHERE (
+             $1::text IS NOT NULL AND $1::text <> '' AND (
+               mobile_number = $1
+               OR REPLACE(COALESCE(mobile_number, ''), ' ', '') = REPLACE($1, ' ', '')
+               OR RIGHT(REGEXP_REPLACE(COALESCE(mobile_number, ''), '[^0-9]', '', 'g'), 10) = RIGHT(REGEXP_REPLACE($1, '[^0-9]', '', 'g'), 10)
+             )
+           )
+           OR ($2::text IS NOT NULL AND $2::text <> '' AND LOWER(TRIM(COALESCE(customer_name, ''))) = LOWER(TRIM($2)))
+           ORDER BY id DESC LIMIT 1`,
+          [mobile_number || '', customer_name || '']
+        );
+        if (custFallback.rows.length > 0) {
+          latestCustomer = custFallback.rows[0];
+          matchedCustId = latestCustomer.id;
+        }
+      }
+
+      if (latestCustomer) {
+        const nameChanged = latestCustomer.customer_name && latestCustomer.customer_name !== customer_name;
+        const mobileChanged = latestCustomer.mobile_number && latestCustomer.mobile_number !== mobile_number;
+        const addressChanged = latestCustomer.address && latestCustomer.address !== address;
+        const districtChanged = latestCustomer.district && latestCustomer.district !== district;
+        const stateChanged = latestCustomer.state && latestCustomer.state !== state;
+        const idNotLinked = !customer_id && matchedCustId;
+
+        if (nameChanged || mobileChanged || addressChanged || districtChanged || stateChanged || idNotLinked || forceRegenerate) {
+          customer_name = latestCustomer.customer_name || customer_name;
+          mobile_number = latestCustomer.mobile_number || mobile_number;
+          address = latestCustomer.address || address;
+          district = latestCustomer.district || district;
+          state = latestCustomer.state || state;
+          email = latestCustomer.email || email;
+          customer_type = latestCustomer.customer_type || customer_type;
+          forceRegenerate = true;
+
+          // Sync database record and permanently link customer_id
+          await pool.query(
+            `UPDATE public.dbooking
+             SET customer_name = $1, mobile_number = $2, address = $3, district = $4, state = $5, email = $6, customer_id = $7
+             WHERE order_id = $8`,
+            [customer_name, mobile_number, address, district, state, email, matchedCustId, foundOrderId]
+          );
+        }
+      }
+    } catch (errCheck) {
+      console.error("Error checking latest customer for direct invoice:", errCheck.message);
     }
 
-    let parsedExtras = {};
-    try {
-      parsedExtras = typeof extra_charges === 'string' ? JSON.parse(extra_charges) : (extra_charges || {});
-    } catch {
-      parsedExtras = {};
-    }
+    if (forceRegenerate || !currentPdfPath || !fs.existsSync(currentPdfPath)) {
+      let parsedProducts = [];
+      try {
+        parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+      } catch {
+        parsedProducts = [];
+      }
 
-    const { buffer } = await generateModernInvoicePDFBuffer(
-      { order_id: foundOrderId, customer_type, total, created_at },
-      { customer_name, address, mobile_number, email, district, state },
-      parsedProducts,
-      parsedExtras
-    );
+      let parsedExtras = {};
+      try {
+        parsedExtras = typeof extra_charges === 'string' ? JSON.parse(extra_charges) : (extra_charges || {});
+      } catch {
+        parsedExtras = {};
+      }
+
+      if (currentPdfPath && fs.existsSync(currentPdfPath)) {
+        try { fs.unlinkSync(currentPdfPath); } catch (e) { }
+      }
+
+      const regenerated = await generateModernInvoicePDF(
+        { order_id: foundOrderId, customer_type, total, created_at, status },
+        { customer_name, address, mobile_number, email, district, state },
+        parsedProducts,
+        parsedExtras
+      );
+      currentPdfPath = regenerated.pdfPath;
+      await pool.query('UPDATE public.dbooking SET pdf = $1 WHERE order_id = $2', [currentPdfPath, foundOrderId]);
+    }
 
     const safeCustomerName = (customer_name || 'customer')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '');
+
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.setHeader('Content-Disposition', `inline; filename=${safeCustomerName}-${foundOrderId}.pdf`);
-    res.send(buffer);
+    fs.createReadStream(currentPdfPath).pipe(res);
   } catch (err) {
     console.error('Error in Direct getInvoice:', err);
     res.status(500).json({ message: 'Failed to fetch invoice', error: err.message });
