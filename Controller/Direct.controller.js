@@ -5,26 +5,26 @@ const PDFDocument = require('pdfkit');
 const XLSX = require('xlsx');
 const nodemailer = require('nodemailer');
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,              // true for 465, false for 587 + STARTTLS
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS.replace(/\s+/g, ''),
-  },
-  tls: {
-    rejectUnauthorized: false, // helpful on some hosts
-  },
-});
+// const transporter = nodemailer.createTransport({
+//   host: 'smtp.gmail.com',
+//   port: 465,
+//   secure: true,              // true for 465, false for 587 + STARTTLS
+//   auth: {
+//     user: process.env.EMAIL_USER,
+//     pass: process.env.EMAIL_PASS.replace(/\s+/g, ''),
+//   },
+//   tls: {
+//     rejectUnauthorized: false, // helpful on some hosts
+//   },
+// });
 
-transporter.verify((error, success) => {
-  if (error) {
-    console.error('Transporter verification FAILED:', error);
-  } else {
-    console.log('Transporter is READY! SMTP connection works.');
-  }
-});
+// transporter.verify((error, success) => {
+//   if (error) {
+//     console.error('Transporter verification FAILED:', error);
+//   } else {
+//     console.log('Transporter is READY! SMTP connection works.');
+//   }
+// });
 
 // Initialize PostgreSQL pool
 const pool = new Pool({
@@ -1675,6 +1675,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
         q.customer_id,
         q.total,
         q.created_at,
+        COALESCE(NULLIF(TRIM(q.mobile_number::text), ''), NULLIF(TRIM(c.mobile_number::text), ''), 'N/A') AS mobile_number,
         COALESCE(NULLIF(TRIM(q.state), ''), NULLIF(TRIM(c.state), ''), 'N/A') AS state,
         COALESCE(NULLIF(TRIM(q.district), ''), NULLIF(TRIM(c.district), ''), 'N/A') AS district,
         COALESCE(NULLIF(TRIM(q.address), ''), NULLIF(TRIM(c.address), ''), 'N/A') AS place,
@@ -1693,6 +1694,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
     const allQuotationRows = quotations.map(q => ({
       "Quotation ID": q.quotation_id || "N/A",
       "Customer Name": q.customer_name || "N/A",
+      "Customer Number": cleanText(q.mobile_number),
       "Agent Name": q.agent_name || (q.customer_type === "Agent" ? q.customer_name : "N/A"),
       "Customer Type": q.customer_type || "User",
       "Place": cleanPlace(q.place),
@@ -1730,6 +1732,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
       const rows = data.map(q => ({
         "Quotation ID": q.quotation_id || "N/A",
         "Customer Name": q.customer_name || "N/A",
+        "Customer Number": cleanText(q.mobile_number),
         ...(type === "Customer of Selected Agent" ? { "Agent Name": q.agent_name || "N/A" } : {}),
         "Customer Type": q.customer_type || "User",
         "Place": cleanPlace(q.place),
