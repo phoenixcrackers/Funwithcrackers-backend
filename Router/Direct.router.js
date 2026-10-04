@@ -7,6 +7,7 @@ router.get('/products/types', directController.getProductTypes);
 router.get('/product', directController.getProductsByType);
 router.get('/aproducts', directController.getAproductsByType);
 router.post('/bookings', directController.createBooking);
+router.put('/bookings/:order_id', directController.updateBooking);
 router.post('/quotations', directController.createQuotation);
 router.get('/quotations', directController.getAllQuotations);
 router.put('/quotations/:quotation_id', directController.updateQuotation);

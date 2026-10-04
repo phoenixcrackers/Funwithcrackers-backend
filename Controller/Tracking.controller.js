@@ -204,7 +204,7 @@ exports.getFilteredBookings = async (req, res) => {
     const { status } = req.query;
     const allowedStatuses = ['paid', 'packed', 'dispatched', 'delivered'];
     let query = `
-      SELECT b.id, b.order_id, b.customer_name, b.district, b.state, b.status, b.products, b.address, b.created_at, b.mobile_number, b.payment_method, b.transaction_id, b.amount_paid, t.transport_name, t.lr_number, t.transport_contact
+      SELECT b.id, b.order_id, b.customer_id, b.customer_name, b.district, b.state, b.status, b.products, b.address, b.created_at, b.mobile_number, b.payment_method, b.transaction_id, b.amount_paid, b.total, b.net_rate, b.you_save, b.additional_discount, b.customer_type, t.transport_name, t.lr_number, t.transport_contact
       FROM public.bookings b
       LEFT JOIN transport_details t ON b.order_id = t.order_id
       WHERE b.status = ANY($1)
@@ -215,12 +215,27 @@ exports.getFilteredBookings = async (req, res) => {
       params.push(status);
     }
     const result = await pool.query(query, params);
-    const bookingsWithTotal = result.rows.map((booking) => ({
-      ...booking,
-      total: booking.products && Array.isArray(booking.products)
-        ? booking.products.reduce((sum, product) => sum + (parseFloat(product.price) || 0) * (product.quantity || 0), 0)
-        : 0,
-    }));
+    const bookingsWithTotal = result.rows.map((booking) => {
+      let finalTotal = booking.total;
+      if (finalTotal === null || finalTotal === undefined || isNaN(parseFloat(finalTotal))) {
+        let prods = booking.products;
+        if (typeof prods === 'string') {
+          try { prods = JSON.parse(prods); } catch (_) { prods = []; }
+        }
+        finalTotal = Array.isArray(prods)
+          ? prods.reduce((sum, product) => {
+              const price = parseFloat(product.price) || 0;
+              const disc = parseFloat(product.discount) || 0;
+              return sum + (price - (price * disc / 100)) * (product.quantity || 1);
+            }, 0) * (1 - (parseFloat(booking.additional_discount) || 0) / 100)
+          : 0;
+      }
+      return {
+        ...booking,
+        total: parseFloat(finalTotal) || 0,
+        amount_paid: booking.amount_paid !== null && booking.amount_paid !== undefined ? parseFloat(booking.amount_paid) : null,
+      };
+    });
     res.status(200).json(bookingsWithTotal);
   } catch (err) {
     console.error('Error fetching filtered bookings:', err);
@@ -248,6 +263,11 @@ exports.getreportBookings = async (req, res) => {
         b.transaction_id, 
         b.amount_paid,
         b.total,
+        b.additional_discount,
+        b.net_rate,
+        b.you_save,
+        b.customer_type,
+        b.customer_id,
         t.transport_name, 
         t.lr_number, 
         t.transport_contact
