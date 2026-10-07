@@ -498,3 +498,64 @@ exports.toggleProductStatus = async (req, res) => {
     res.status(500).json({ message: "Failed to toggle status", error: err.message });
   }
 };
+
+exports.updateProductImagesOnly = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { tableName, id } = req.params;
+    const { mode = "replace" } = req.body;
+    const files = req.files || [];
+
+    if (!files.length && !req.body.existingImages) {
+      return res.status(400).json({ message: "No images provided" });
+    }
+
+    const currentProduct = await client.query(`SELECT image FROM public.${tableName} WHERE id = $1`, [id]);
+    if (currentProduct.rows.length === 0) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    let existingImages = [];
+    if (currentProduct.rows[0].image) {
+      try {
+        existingImages = JSON.parse(currentProduct.rows[0].image) || [];
+      } catch (e) {
+        existingImages = [];
+      }
+    }
+
+    const newUploadedUrls = files.map((file) => file.path);
+    let finalImages = [];
+    if (mode === "append") {
+      finalImages = [...existingImages, ...newUploadedUrls];
+    } else {
+      // replace mode: delete old images from Cloudinary
+      for (const url of existingImages) {
+        if (!newUploadedUrls.includes(url)) {
+          const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
+          if (publicId) {
+            await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
+              resource_type: url.includes("/video/") ? "video" : "image",
+            });
+          }
+        }
+      }
+      finalImages = newUploadedUrls;
+    }
+
+    await client.query(
+      `UPDATE public.${tableName} SET image = $1 WHERE id = $2`,
+      [finalImages.length > 0 ? JSON.stringify(finalImages) : null, id]
+    );
+
+    res.status(200).json({
+      message: "Product images updated successfully",
+      images: finalImages,
+    });
+  } catch (err) {
+    console.error("Error in updateProductImagesOnly:", err);
+    res.status(500).json({ message: "Failed to update images", error: err.message });
+  } finally {
+    client.release();
+  }
+};
