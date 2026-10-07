@@ -189,14 +189,28 @@ exports.updateGiftBoxProduct = async (req, res) => {
       [id]
     );
     if (currentProduct.rows.length > 0 && currentProduct.rows[0].image) {
-      const currentImages = JSON.parse(currentProduct.rows[0].image) || [];
-      const imagesToDelete = currentImages.filter((url) => !finalImages.includes(url));
+      let currentImages = [];
+      try {
+        const parsed = typeof currentProduct.rows[0].image === 'string' ? JSON.parse(currentProduct.rows[0].image) : currentProduct.rows[0].image;
+        currentImages = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        currentImages = [currentProduct.rows[0].image];
+      }
+      const imagesToDelete = currentImages.filter((url) => {
+        const u = typeof url === 'string' ? url : (url?.path || url?.url || '');
+        return u && !finalImages.includes(u);
+      });
       for (const url of imagesToDelete) {
-        const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
-        if (publicId) {
-          await cloudinary.uploader.destroy(`hifi_products/${publicId}`, {
-            resource_type: url.includes('/video/') ? 'video' : 'image',
-          });
+        try {
+          const urlStr = typeof url === 'string' ? url : (url?.path || url?.url || '');
+          const publicId = urlStr ? urlStr.match(/\/mnc_products\/(.+?)\./)?.[1] : null;
+          if (publicId) {
+            await cloudinary.uploader.destroy(`hifi_products/${publicId}`, {
+              resource_type: urlStr.includes('/video/') ? 'video' : 'image',
+            });
+          }
+        } catch (cErr) {
+          console.warn('Failed to delete Cloudinary image (non-fatal):', cErr.message);
         }
       }
     }
@@ -249,13 +263,24 @@ exports.deleteGiftBoxProduct = async (req, res) => {
 
     // Delete images from Cloudinary
     if (result.rows[0].image) {
-      const images = JSON.parse(result.rows[0].image) || [];
+      let images = [];
+      try {
+        const parsed = typeof result.rows[0].image === 'string' ? JSON.parse(result.rows[0].image) : result.rows[0].image;
+        images = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        images = [result.rows[0].image];
+      }
       for (const url of images) {
-        const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
-        if (publicId) {
-          await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
-            resource_type: url.includes('/video/') ? 'video' : 'image',
-          });
+        try {
+          const urlStr = typeof url === 'string' ? url : (url?.path || url?.url || '');
+          const publicId = urlStr ? urlStr.match(/\/mnc_products\/(.+?)\./)?.[1] : null;
+          if (publicId) {
+            await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
+              resource_type: urlStr.includes('/video/') ? 'video' : 'image',
+            });
+          }
+        } catch (cErr) {
+          console.warn('Failed to delete Cloudinary image (non-fatal):', cErr.message);
         }
       }
     }

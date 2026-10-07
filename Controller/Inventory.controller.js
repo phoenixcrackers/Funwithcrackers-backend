@@ -8,6 +8,49 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// Safely extract URL string from string, object, or property
+function safeExtractUrl(val) {
+  if (typeof val === 'string') return val;
+  if (val && typeof val === 'object') {
+    return val.path || val.url || val.secure_url || '';
+  }
+  return '';
+}
+
+// Safely delete an image from Cloudinary without crashing if url is invalid or doesn't exist
+async function safeDestroyCloudinaryImage(url) {
+  try {
+    const urlStr = safeExtractUrl(url);
+    if (!urlStr || typeof urlStr !== 'string') return;
+    const match = urlStr.match(/\/mnc_products\/(.+?)\./);
+    const publicId = match?.[1];
+    if (publicId) {
+      await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
+        resource_type: urlStr.includes("/video/") ? "video" : "image",
+      });
+    }
+  } catch (err) {
+    console.warn("Failed to delete Cloudinary image (non-fatal):", err.message);
+  }
+}
+
+// Safely parse raw image column from database into an array
+function safeParseImages(rawImage) {
+  if (!rawImage) return [];
+  if (Array.isArray(rawImage)) return rawImage;
+  if (typeof rawImage === 'object') return [rawImage];
+  if (typeof rawImage === 'string') {
+    try {
+      const parsed = JSON.parse(rawImage);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      return [rawImage];
+    }
+  }
+  return [];
+}
+
+
 // const pool = new Pool({
 //   user: process.env.PGUSER,
 //   password: process.env.PGPASSWORD,
@@ -202,15 +245,13 @@ exports.updateProduct = async (req, res) => {
     // Delete removed images from Cloudinary
     const currentProduct = await client.query(`SELECT image FROM public.${tableName} WHERE id = $1`, [id]);
     if (currentProduct.rows.length > 0 && currentProduct.rows[0].image) {
-      const currentImages = JSON.parse(currentProduct.rows[0].image) || [];
-      const imagesToDelete = currentImages.filter((url) => !finalImages.includes(url));
+      const currentImages = safeParseImages(currentProduct.rows[0].image);
+      const imagesToDelete = currentImages.filter((item) => {
+        const itemStr = safeExtractUrl(item);
+        return itemStr && !finalImages.includes(itemStr) && !finalImages.includes(item);
+      });
       for (const url of imagesToDelete) {
-        const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
-        if (publicId) {
-          await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
-            resource_type: url.includes("/video/") ? "video" : "image",
-          });
-        }
+        await safeDestroyCloudinaryImage(url);
       }
     }
 
@@ -375,14 +416,9 @@ exports.deleteProduct = async (req, res) => {
 
     // Delete images from Cloudinary
     if (result.rows[0].image) {
-      const images = JSON.parse(result.rows[0].image) || [];
+      const images = safeParseImages(result.rows[0].image);
       for (const url of images) {
-        const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
-        if (publicId) {
-          await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
-            resource_type: url.includes("/video/") ? "video" : "image",
-          });
-        }
+        await safeDestroyCloudinaryImage(url);
       }
     }
 
@@ -421,14 +457,9 @@ exports.deleteProductType = async (req, res) => {
     const products = await client.query(`SELECT image FROM public.${tableName}`);
     for (const product of products.rows) {
       if (product.image) {
-        const images = JSON.parse(product.image) || [];
+        const images = safeParseImages(product.image);
         for (const url of images) {
-          const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
-          if (publicId) {
-            await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
-              resource_type: url.includes("/video/") ? "video" : "image",
-            });
-          }
+          await safeDestroyCloudinaryImage(url);
         }
       }
     }
@@ -517,11 +548,7 @@ exports.updateProductImagesOnly = async (req, res) => {
 
     let existingImages = [];
     if (currentProduct.rows[0].image) {
-      try {
-        existingImages = JSON.parse(currentProduct.rows[0].image) || [];
-      } catch (e) {
-        existingImages = [];
-      }
+      existingImages = safeParseImages(currentProduct.rows[0].image);
     }
 
     const newUploadedUrls = files.map((file) => file.path);
@@ -531,13 +558,9 @@ exports.updateProductImagesOnly = async (req, res) => {
     } else {
       // replace mode: delete old images from Cloudinary
       for (const url of existingImages) {
-        if (!newUploadedUrls.includes(url)) {
-          const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
-          if (publicId) {
-            await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
-              resource_type: url.includes("/video/") ? "video" : "image",
-            });
-          }
+        const urlStr = safeExtractUrl(url);
+        if (!newUploadedUrls.includes(urlStr)) {
+          await safeDestroyCloudinaryImage(url);
         }
       }
       finalImages = newUploadedUrls;
