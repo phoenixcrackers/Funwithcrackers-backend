@@ -38,20 +38,31 @@ const pool = new Pool({
 // ── Sequential ID generator — produces IDs like "2026quo1", "2026ord1" ──
 // Looks at existing IDs for the current year prefix and returns prefix + (max + 1).
 const generateSequentialId = async (dbClient, table, column, prefix) => {
-  const result = await dbClient.query(
-    `SELECT ${column} FROM public.${table} WHERE ${column} LIKE $1`,
-    [`${prefix}%`]
-  );
-  const regex = new RegExp(`^${prefix}(\\d+)$`);
-  let maxNum = 0;
-  for (const row of result.rows) {
-    const match = String(row[column]).match(regex);
-    if (match) {
-      const num = parseInt(match[1], 10);
-      if (num > maxNum) maxNum = num;
+  try {
+    const q = `
+      SELECT COALESCE(MAX(CAST(SUBSTRING(${column} FROM ${prefix.length + 1}) AS INTEGER)), 0) AS max_num
+      FROM public.${table}
+      WHERE ${column} LIKE $1 AND ${column} ~ $2
+    `;
+    const res = await dbClient.query(q, [`${prefix}%`, `^${prefix}[0-9]+$`]);
+    const maxNum = parseInt(res.rows[0]?.max_num || 0, 10);
+    return `${prefix}${maxNum + 1}`;
+  } catch (err) {
+    const result = await dbClient.query(
+      `SELECT ${column} FROM public.${table} WHERE ${column} LIKE $1`,
+      [`${prefix}%`]
+    );
+    const regex = new RegExp(`^${prefix}(\\d+)$`);
+    let maxNum = 0;
+    for (const row of result.rows) {
+      const match = String(row[column]).match(regex);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
+      }
     }
+    return `${prefix}${maxNum + 1}`;
   }
-  return `${prefix}${maxNum + 1}`;
 };
 
 const generatePDFBuffer = (type, data, customerDetails, products, dbValues) => {
@@ -481,23 +492,32 @@ exports.getProductTypes = async (req, res) => {
   }
 };
 
+// In-memory cache for direct products to avoid repeated heavy queries
+let aproductsCache = { data: null, timestamp: 0 };
+const APRODUCTS_CACHE_TTL = 30 * 1000; // 30 seconds
+
 exports.getProductsByType = async (req, res) => {
   try {
     const productTypesResult = await pool.query('SELECT DISTINCT product_type FROM public.products');
     const productTypes = productTypesResult.rows.map(row => row.product_type);
 
-    let allProducts = [];
-
-    for (const productType of productTypes) {
+    const queryPromises = productTypes.map(async (productType) => {
       const tableName = productType.toLowerCase().replace(/\s+/g, '_');
-      const query = `
-        SELECT id, serial_number, productname, price, dprice, per, discount, image, status, $1 AS product_type
-        FROM public.${tableName}
-        WHERE status = 'on'
-      `;
-      const result = await pool.query(query, [productType]);
-      allProducts = allProducts.concat(result.rows);
-    }
+      try {
+        const query = `
+          SELECT id, serial_number, productname, price, dprice, per, discount, status, $1 AS product_type
+          FROM public."${tableName.replace(/"/g, '""')}"
+          WHERE status = 'on'
+        `;
+        const result = await pool.query(query, [productType]);
+        return result.rows;
+      } catch (tableErr) {
+        return [];
+      }
+    });
+
+    const tableResults = await Promise.all(queryPromises);
+    const allProducts = tableResults.flat();
 
     const products = allProducts.map(row => ({
       id: row.id,
@@ -508,7 +528,6 @@ exports.getProductsByType = async (req, res) => {
       dprice: parseFloat(row.dprice || 0),
       per: row.per,
       discount: parseFloat(row.discount || 0),
-      image: row.image,
       status: row.status
     }));
 
@@ -521,20 +540,30 @@ exports.getProductsByType = async (req, res) => {
 
 exports.getAproductsByType = async (req, res) => {
   try {
+    // Serve from cache if fresh
+    if (aproductsCache.data && (Date.now() - aproductsCache.timestamp < APRODUCTS_CACHE_TTL)) {
+      return res.status(200).json(aproductsCache.data);
+    }
+
     const productTypesResult = await pool.query('SELECT DISTINCT product_type FROM public.products');
     const productTypes = productTypesResult.rows.map(row => row.product_type);
 
-    let allProducts = [];
-
-    for (const productType of productTypes) {
+    const queryPromises = productTypes.map(async (productType) => {
       const tableName = productType.toLowerCase().replace(/\s+/g, '_');
-      const query = `
-        SELECT id, serial_number, productname, dprice, price, per, discount, image, status, $1 AS product_type
-        FROM public.${tableName}
-      `;
-      const result = await pool.query(query, [productType]);
-      allProducts = allProducts.concat(result.rows);
-    }
+      try {
+        const query = `
+          SELECT id, serial_number, productname, dprice, price, per, discount, status, $1 AS product_type
+          FROM public."${tableName.replace(/"/g, '""')}"
+        `;
+        const result = await pool.query(query, [productType]);
+        return result.rows;
+      } catch (tableErr) {
+        return [];
+      }
+    });
+
+    const tableResults = await Promise.all(queryPromises);
+    const allProducts = tableResults.flat();
 
     const products = allProducts.map(row => ({
       id: row.id,
@@ -545,9 +574,10 @@ exports.getAproductsByType = async (req, res) => {
       dprice: parseFloat(row.dprice || 0),
       per: row.per,
       discount: parseFloat(row.discount || 0),
-      image: row.image,
       status: row.status
     }));
+
+    aproductsCache = { data: products, timestamp: Date.now() };
 
     res.status(200).json(products);
   } catch (err) {
@@ -561,7 +591,7 @@ exports.getAllQuotations = async (req, res) => {
     const query = `
       SELECT id, customer_id, quotation_id, products, net_rate, you_save, total, promo_discount, additional_discount,
              customer_name, address, mobile_number, email, district, state, customer_type, 
-             status, created_at, updated_at, pdf
+             status, created_at, updated_at
       FROM public.fwcquotations
       ORDER BY created_at DESC
     `;
@@ -640,13 +670,15 @@ exports.createQuotation = async (req, res) => {
       if (!id || !product_type || !productname || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
         return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)' });
 
-      let productPer = per || 'Unit'; // Default to 'Unit' if per is not provided
-      if (product_type.toLowerCase() !== 'custom') {
-        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-        if (productCheck.rows.length === 0)
-          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
-        productPer = productCheck.rows[0].per || productPer;
+      let productPer = per || 'Unit';
+      if (!per && product_type.toLowerCase() !== 'custom') {
+        try {
+          const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+          const productCheck = await pool.query(`SELECT per FROM public."${tableName.replace(/"/g, '""')}" WHERE id = $1`, [id]);
+          if (productCheck.rows.length > 0) {
+            productPer = productCheck.rows[0].per || productPer;
+          }
+        } catch (_) {}
       }
       enhancedProducts.push({ ...product, per: productPer });
     }
@@ -702,20 +734,7 @@ exports.createQuotation = async (req, res) => {
       if (client) client.release();
     }
 
-    // ── PDF generation (best-effort, doesn't block quotation creation) ──
-    try {
-      await generatePDFBuffer(
-        'quotation',
-        { quotation_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
-        customerDetails,
-        enhancedProducts,
-        { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
-      );
-      console.log('PDF generated');
-    } catch (pdfError) {
-      console.error(`PDF generation failed for quotation_id ${quotation_id}: ${pdfError.message}`);
-    }
-
+    // Quotation created successfully. Client fetches PDF on demand via GET /api/direct/quotation/:quotation_id
     res.status(200).json({
       message: 'Quotation created successfully',
       quotation_id,
@@ -818,12 +837,14 @@ exports.updateQuotation = async (req, res) => {
           return res.status(400).json({ message: 'Invalid product entry', quotation_id });
 
         let productPer = per || 'Unit';
-        if (product_type.toLowerCase() !== 'custom') {
-          const tbl = product_type.toLowerCase().replace(/\s+/g, '_');
-          const pr = await pool.query(`SELECT per FROM public.${tbl} WHERE id = $1`, [id]);
-          if (pr.rows.length === 0)
-            return res.status(404).json({ message: `Product ${id} not found`, quotation_id });
-          productPer = pr.rows[0].per || productPer;
+        if (!per && product_type.toLowerCase() !== 'custom') {
+          try {
+            const tbl = product_type.toLowerCase().replace(/\s+/g, '_');
+            const pr = await pool.query(`SELECT per FROM public."${tbl.replace(/"/g, '""')}" WHERE id = $1`, [id]);
+            if (pr.rows.length > 0) {
+              productPer = pr.rows[0].per || productPer;
+            }
+          } catch (_) {}
         }
         enhancedProducts.push({ ...p, per: productPer });
       }
@@ -1098,12 +1119,14 @@ exports.createBooking = async (req, res) => {
         return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)' });
 
       let productPer = per || 'Unit';
-      if (product_type.toLowerCase() !== 'custom') {
-        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-        if (productCheck.rows.length === 0)
-          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
-        productPer = productCheck.rows[0].per || productPer;
+      if (!per && product_type.toLowerCase() !== 'custom') {
+        try {
+          const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+          const productCheck = await pool.query(`SELECT per FROM public."${tableName.replace(/"/g, '""')}" WHERE id = $1`, [id]);
+          if (productCheck.rows.length > 0) {
+            productPer = productCheck.rows[0].per || productPer;
+          }
+        } catch (_) {}
       }
       enhancedProducts.push({ ...product, per: productPer });
     }
